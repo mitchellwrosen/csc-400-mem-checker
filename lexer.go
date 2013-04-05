@@ -20,7 +20,7 @@ func lex(name, input string) (*lexer, chan token) {
 	l := &lexer{
 		name:   name,
 		input:  input,
-		tokens: make(chan token),
+		tokens: make(chan token, 10),
 	}
 
 	go l.run()
@@ -100,7 +100,10 @@ func (l *lexer) errorf(format string, args ...interface{}) stateFun {
 	return nil
 }
 
-// emits a token to the client (parser)
+// Emits a token to the client (parser), with value [start, pos), then advances
+// start to pos.
+//
+// param	t	The type of the token to emit.
 func (l *lexer) emit(t tokenType) {
 	l.tokens <- token{t, l.input[l.start:l.pos]}
 	l.start = l.pos

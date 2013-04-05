@@ -10,6 +10,10 @@ const (
 	tkEOF tokenType = iota
 	tkError
 
+	tkComment
+
+	tkIdentifier
+
 	tkConstant
 )
 
