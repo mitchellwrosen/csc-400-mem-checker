@@ -6,7 +6,25 @@ import (
 	"unicode"
 )
 
-const EOF = -1
+const (
+	EOF = -1
+
+	DIGITS     = "0123456789"
+	HEX_DIGITS = "abcdefABCDEF0123456789"
+)
+
+func isLetter(c rune) bool {
+	return (c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z')
+}
+
+func isDigit(c rune) bool {
+	return c >= '0' && c <= '9'
+}
+
+func isAlphaNum(c rune) bool {
+	return isLetter(c) && isDigit(c)
+}
 
 type lexer struct {
 	name   string     // used only for error reports
@@ -37,8 +55,28 @@ func (l *lexer) next() rune {
 	return rune(r)
 }
 
+func (l *lexer) peek() rune {
+	if l.pos >= len(l.input) {
+		return EOF
+	}
+	return rune(l.input[l.pos])
+}
+
+// Gets the current value of the lexer
+func (l *lexer) val() string {
+	return l.input[l.start:l.pos]
+}
+
 func (l *lexer) ignore() {
 	l.start = l.pos
+}
+
+func (l *lexer) advance() {
+	l.pos++
+}
+
+func (l *lexer) advanceBy(n int) {
+	l.pos += n
 }
 
 func (l *lexer) backup() {
@@ -47,12 +85,6 @@ func (l *lexer) backup() {
 
 func (l *lexer) backupBy(n int) {
 	l.pos -= n
-}
-
-func (l *lexer) peek() rune {
-	r := l.next()
-	l.backup()
-	return r
 }
 
 // possibly consumes a character in |valid|
@@ -64,9 +96,21 @@ func (l *lexer) accept(valid string) bool {
 	return false
 }
 
+// consume [a-fA-F0-9]
+func (l *lexer) acceptHexDigit() bool {
+	return l.accept(HEX_DIGITS)
+}
+
 // consumes characters until one not in |valid| is found
 func (l *lexer) acceptRun(valid string) {
 	for strings.ContainsRune(valid, l.next()) {
+	}
+	l.backup()
+}
+
+// consume characters until whitespace {
+func (l *lexer) acceptNonWhitespaceRun() {
+	for !unicode.IsSpace(l.next()) {
 	}
 	l.backup()
 }
@@ -77,6 +121,10 @@ func (l *lexer) peekAccept(valid string) bool {
 		return true
 	}
 	return false
+}
+
+func (l *lexer) peekAcceptDigit() bool {
+	return l.peekAccept(DIGITS)
 }
 
 // peeks until char not in |valid|, returns number in |valid|
@@ -105,7 +153,7 @@ func (l *lexer) errorf(format string, args ...interface{}) stateFun {
 //
 // param	t	The type of the token to emit.
 func (l *lexer) emit(t tokenType) {
-	l.tokens <- token{t, l.input[l.start:l.pos]}
+	l.tokens <- token{t, l.val()}
 	l.start = l.pos
 }
 
@@ -129,8 +177,8 @@ func lexCode(l *lexer) stateFun {
 		return lexIdentifier
 	}
 
-	if l.isConstant() {
-		return lexConstant
+	if l.isConstant1() {
+		return lexConstant1
 	}
 
 	//if l.isStringLiteral() {
@@ -166,7 +214,7 @@ func lexComment(l *lexer) stateFun {
 func (l *lexer) isIdentifier() bool {
 	defer l.backup() // matched by single call to next()
 
-	if c := l.next(); unicode.IsLetter(c) || c == '_' {
+	if c := l.next(); isLetter(c) || c == '_' {
 		// Could be constant or string literal
 		if c == 'L' {
 			if c2 := l.peek(); c2 == '\'' || c2 == '"' {
@@ -179,25 +227,99 @@ func (l *lexer) isIdentifier() bool {
 }
 
 func lexIdentifier(l *lexer) stateFun {
-	// TODO
+	l.accept("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+
+	switch id := l.val(); id {
+	case "auto":
+		l.emit(tkAuto)
+	case "break":
+		l.emit(tkBreak)
+	case "case":
+		l.emit(tkCase)
+	case "char":
+		l.emit(tkChar)
+	case "const":
+		l.emit(tkConst)
+	case "continue":
+		l.emit(tkContinue)
+	case "default":
+		l.emit(tkDefault)
+	case "do":
+		l.emit(tkDo)
+	case "double":
+		l.emit(tkDouble)
+	case "else":
+		l.emit(tkElse)
+	case "enum":
+		l.emit(tkEnum)
+	case "extern":
+		l.emit(tkExtern)
+	case "float":
+		l.emit(tkFloat)
+	case "for":
+		l.emit(tkFor)
+	case "goto":
+		l.emit(tkGoto)
+	case "if":
+		l.emit(tkIf)
+	case "int":
+		l.emit(tkInt)
+	case "long":
+		l.emit(tkLong)
+	case "register":
+		l.emit(tkRegister)
+	case "return":
+		l.emit(tkReturn)
+	case "short":
+		l.emit(tkShort)
+	case "signed":
+		l.emit(tkSigned)
+	case "sizeof":
+		l.emit(tkSizeof)
+	case "static":
+		l.emit(tkStatic)
+	case "struct":
+		l.emit(tkStruct)
+	case "switch":
+		l.emit(tkSwitch)
+	case "typedef":
+		l.emit(tkTypedef)
+	case "union":
+		l.emit(tkUnion)
+	case "unsigned":
+		l.emit(tkUnsigned)
+	case "void":
+		l.emit(tkVoid)
+	case "volatile":
+		l.emit(tkVolatile)
+	case "while":
+		l.emit(tkWhile)
+	default:
+		l.emit(tkIdentifier)
+	}
+
 	return lexCode
 }
 
-// 0[xX][a-fA-F0-9]+(u|U|l|L)*
+// 0[xX]{H}+{IS}?
+// 0{D}+{IS}?
+// {D}+{IS}?
+// L?'(\\.|[^\\'])+'
+// {D}+{E}{FS}?	
+// {D}*"."{D}+({E})?{FS}?
+// {D}+"."{D}*({E})?{FS}?
+// where {D}  = [0-9]
+//	     {H}  = [a-zA-Z0-9]
+//		 {E}  = [Ee][+-]?{D}+
+//       {FS} = (f|F|l|L)
+//       {IS} = (u|U|l|L)*
 func (l *lexer) isConstant() bool {
-	if l.next() == '0' {
-		if l.accept("xX") {
-			l.backupBy(2)
-			return true
-		} else {
-			l.backup()
-			return false
-		}
-	}
-	return false
+	// matches all but the one I don't understand (4th from the top)
+	return l.peekAcceptDigit()
 }
 
-func lexConstant(l *lexer) stateFun {
+// 0[xX]{H}+{IS}?
+func lexConstant1(l *lexer) stateFun {
 	l.next() // discard 0
 	l.next() // discard [xX]
 
@@ -208,10 +330,23 @@ func lexConstant(l *lexer) stateFun {
 	l.acceptRun(digits)
 
 	chars := "uUlL"
-	l.acceptRun(chars)
+	l.accept(chars)
+
+	// regex fully parsed - look for invalid suffix (an alphanum)
+	if next := l.peek(); isAlphaNum(next) {
+		l.ignore()                 // discard the entire constant
+		l.acceptNonWhitespaceRun() // get the invalid suffix to report
+		return l.errorf("invalid suffix \"%s\" on hex constant", l.val())
+	}
+
 	l.emit(tkConstant)
 
 	return lexCode
+}
+
+// {D}+{IS}?
+func (l *lexer) isConstant2() bool {
+
 }
 
 //func lexText(l *lexer) stateFun {

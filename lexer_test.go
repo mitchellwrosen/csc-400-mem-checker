@@ -87,5 +87,19 @@ func (s *S) TestPredicates(c *C) {
 	l := lexer{input: "/* foo */"}
 	c.Check(l.isComment(), Equals, true)
 
+	l.input = "int"
+	c.Check(l.isIdentifier(), Equals, true)
+	l.input = "integer123"
+	c.Check(l.isIdentifier(), Equals, true)
+	l.input = "int_eger"
+	c.Check(l.isIdentifier(), Equals, true)
+
+	l.input = "0x"
+	c.Check(l.isConstant(), Equals, true)
+	l.input = "0X"
+	c.Check(l.isConstant(), Equals, true)
+
+
+
 	// TODO: more
 }

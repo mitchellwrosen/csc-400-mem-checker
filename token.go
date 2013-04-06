@@ -12,6 +12,39 @@ const (
 
 	tkComment
 
+	tkAuto
+	tkBreak
+	tkCase
+	tkChar
+	tkConst
+	tkContinue
+	tkDefault
+	tkDo
+	tkDouble
+	tkElse
+	tkEnum
+	tkExtern
+	tkFloat
+	tkFor
+	tkGoto
+	tkIf
+	tkInt
+	tkLong
+	tkRegister
+	tkReturn
+	tkShort
+	tkSigned
+	tkSizeof
+	tkStatic
+	tkStruct
+	tkSwitch
+	tkTypedef
+	tkUnion
+	tkUnsigned
+	tkVoid
+	tkVolatile
+	tkWhile
+
 	tkIdentifier
 
 	tkConstant
