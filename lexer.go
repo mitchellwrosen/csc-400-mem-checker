@@ -230,15 +230,14 @@ func (l *lexer) isBlockComment() bool {
 }
 
 func lexBlockComment(l *lexer) action {
-	var c rune
-
 	l.advanceBy(2) // consume "/*"
-	for c = l.next(); c != EOF; {
+	for c := l.next(); c != EOF; c = l.next() {
 		if c == '*' {
-			for c = l.next(); c == '*'; {
+			var c2 rune
+			for c2 = l.next(); c2 == '*'; c2 = l.next() {
 			}
 
-			if c == '/' {
+			if c2 == '/' {
 				l.ignore()
 				return lexCode
 			}
@@ -263,7 +262,8 @@ func (l *lexer) isCppStyleComment() bool {
 
 func lexCppStyleComment(l *lexer) action {
 	l.advanceBy(2) // consume "//"
-	for c := l.next(); c != '\n' && c != EOF; {
+
+	for c := l.next(); c != '\n' && c != EOF; c = l.next() {
 	}
 
 	l.ignore()
