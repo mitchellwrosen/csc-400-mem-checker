@@ -141,6 +141,7 @@ func (l *lexer) peekAcceptRun(valid string) int {
 		run++
 	}
 	l.backupBy(run + 1) // We consumed at all valid plus the first invalid
+
 	return run
 }
 

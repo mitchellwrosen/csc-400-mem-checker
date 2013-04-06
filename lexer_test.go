@@ -1,8 +1,8 @@
 package main
 
 import (
-	//	"fmt"
 	. "launchpad.net/gocheck"
+	"strings"
 	"testing"
 	"time"
 )
@@ -77,7 +77,7 @@ func (s *S) TestEmit(c *C) {
 		c.Check(tk.typ, Equals, tkConstant)
 		c.Check(tk.val, Equals, "01234")
 	case <-time.After(time.Second):
-		c.Errorf("Timed out waiting for tkConstant")
+		c.Fatalf("timed out")
 	}
 
 	c.Check(l.peek(), Equals, '5')
@@ -104,8 +104,51 @@ func (s *S) TestPredicates(c *C) {
 }
 
 func (s *S) TestLexComments(c *C) {
-	_, tokens := lex("/* foo */\n// bar")
-	for tk := range tokens {
+	_, tokenCh := lex("/* foo */\n// bar")
+	select {
+	case tk := <-tokenCh:
 		c.Check(tk.typ, Equals, tkEOF)
+	case <-time.After(time.Second):
+		c.Fatalf("timed out")
+	}
+}
+
+func (s *S) TestLexIdentifier(c *C) {
+	keywords := []string{"auto", "break", "case", "char", "const", "continue",
+		"default", "do", "double",
+		"else", "enum", "extern", "float", "for", "goto", "if",
+		"inline", "int", "long",
+		"register", "restrict", "return", "short", "signed",
+		"sizeof", "static",
+		"struct", "switch", "typedef", "union", "unsigned",
+		"void", "volatile", "while"}
+	keywordTypes := []tokenType{tkAuto, tkBreak, tkCase, tkChar, tkConst,
+		tkContinue, tkDefault, tkDo, tkDouble, tkElse, tkEnum, tkExtern,
+		tkFloat, tkFor, tkGoto, tkIf, tkInline, tkInt, tkLong, tkRegister,
+		tkRestrict, tkReturn, tkShort, tkSigned, tkSizeof, tkStatic, tkStruct,
+		tkSwitch, tkTypedef, tkUnion, tkUnsigned, tkVoid, tkVolatile, tkWhile,
+	}
+	identifiers := []string{"foo", "f00", "foo_bar", "__foo__"}
+	input := strings.Join(append(keywords, identifiers...), " ")
+
+	_, tokenCh := lex(input)
+
+	for _, kw := range keywordTypes {
+		select {
+		case tk := <-tokenCh:
+			c.Check(tk.typ, Equals, kw)
+		case <-time.After(time.Second):
+			c.Fatalf("timed out")
+		}
+	}
+
+	for _, id := range identifiers {
+		select {
+		case tk := <-tokenCh:
+			c.Check(tk.typ, Equals, tkIdentifier)
+			c.Check(tk.val, Equals, id)
+		case <-time.After(1 * time.Second):
+			c.Fatalf("timed out")
+		}
 	}
 }
