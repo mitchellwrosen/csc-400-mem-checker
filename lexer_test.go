@@ -102,3 +102,10 @@ func (s *S) TestPredicates(c *C) {
 
 	// TODO: more
 }
+
+func (s *S) TestLexComments(c *C) {
+	_, tokens := lex("/* foo */\n// bar")
+	for tk := range tokens {
+		c.Check(tk.typ, Equals, tkEOF)
+	}
+}

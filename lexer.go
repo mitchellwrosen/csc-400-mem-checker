@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"unicode"
 )
@@ -19,42 +18,19 @@ type lexer struct {
 	start  int        // start position of this token
 	pos    int        // current position in the input
 	tokens chan token // channel of scanned token
-
-	actionMap map[string]action // map of predicate method names to actions
-}
-
-// Creates a new lexer to lex the given C code.
-//
-// param	input	The C code to lex
-//
-// returns	A pointer to the new lexer
-func newLexer(input string) *lexer {
-	tokens := make(chan token, 10)
-	actionMap := map[string]action{
-		"isWhitespace":      lexWhitespace,
-		"isBlockComment":    lexBlockComment,
-		"isCppStyleComment": lexCppStyleComment,
-		"isIdentifier":      lexIdentifier,
-		"isConstant":        lexConstant,
-		"isStringLiteral":   lexStringLiteral,
-		"isOther":           lexOther,
-	}
-
-	return &lexer{
-		input:     input,
-		tokens:    tokens,
-		actionMap: actionMap,
-	}
 }
 
 // Lexes the given C code.
-// 
+//
 // param input	The C code to lex
 //
 // returns	A pointer to the new lexer
 //			A channel of tokens to receive from
 func lex(input string) (*lexer, chan token) {
-	l := newLexer(input)
+	l := &lexer{
+		input:  input,
+		tokens: make(chan token, 10),
+	}
 	go l.run()
 	return l, l.tokens
 }
@@ -200,22 +176,31 @@ func (l *lexer) run() {
 type action func(l *lexer) action
 
 func lexCode(l *lexer) action {
-	for c := l.peek(); c != EOF; {
-		for predStr, fun := range l.actionMap {
-			pred, ok := reflect.TypeOf(l).MethodByName(predStr)
-			if !ok {
-				panic(fmt.Sprintf("lexer method %s not found", predStr))
-			}
-
-			// This reflection is ridiculous - should probably just go back to
-			// a bunch of if statements
-			val := []reflect.Value{reflect.ValueOf(l)}
-			if pred.Func.Call(val)[0].Bool() {
-				fun(l)
-			}
-		}
+	if l.isEOF() {
+		return lexEOF(l)
+	} else if l.isWhitespace() {
+		return lexWhitespace(l)
+	} else if l.isBlockComment() {
+		return lexBlockComment(l)
+	} else if l.isCppStyleComment() {
+		return lexCppStyleComment(l)
+	} else if l.isIdentifier() {
+		return lexIdentifier(l)
+	} else if l.isConstant() {
+		return lexConstant(l)
+	} else if l.isStringLiteral() {
+		return lexStringLiteral(l)
+	} else if l.isOther() {
+		return lexOther(l)
 	}
+	panic("NOTREACHED")
+}
 
+func (l *lexer) isEOF() bool {
+	return l.peek() == EOF
+}
+
+func lexEOF(l *lexer) action {
 	l.emit(tkEOF)
 	return nil
 }
