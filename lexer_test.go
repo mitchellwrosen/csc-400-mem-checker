@@ -85,7 +85,10 @@ func (s *S) TestEmit(c *C) {
 
 func (s *S) TestPredicates(c *C) {
 	l := lexer{input: "/* foo */"}
-	c.Check(l.isComment(), Equals, true)
+	c.Check(l.isBlockComment(), Equals, true)
+
+	l.input = "// foo"
+	c.Check(l.isCppStyleComment(), Equals, true)
 
 	l.input = "int"
 	c.Check(l.isIdentifier(), Equals, true)
@@ -94,12 +97,8 @@ func (s *S) TestPredicates(c *C) {
 	l.input = "int_eger"
 	c.Check(l.isIdentifier(), Equals, true)
 
-	l.input = "0x"
+	l.input = "12345"
 	c.Check(l.isConstant(), Equals, true)
-	l.input = "0X"
-	c.Check(l.isConstant(), Equals, true)
-
-
 
 	// TODO: more
 }

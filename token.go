@@ -10,8 +10,6 @@ const (
 	tkEOF tokenType = iota
 	tkError
 
-	tkComment
-
 	tkAuto
 	tkBreak
 	tkCase
@@ -28,9 +26,11 @@ const (
 	tkFor
 	tkGoto
 	tkIf
+	tkInline
 	tkInt
 	tkLong
 	tkRegister
+	tkRestrict
 	tkReturn
 	tkShort
 	tkSigned
@@ -47,7 +47,56 @@ const (
 
 	tkIdentifier
 
-	tkConstant
+	tkConstant // int constant, float constant
+
+	tkStringLiteral
+
+	tkEllipsis
+	tkRightAssign
+	tkLeftAssign
+	tkAddAssign
+	tkSubAssign
+	tkMulAssign
+	tkDivAssign
+	tkModAssign
+	tkAndAssign
+	tkXorAssign
+	tkOrAssign
+	tkRightOp
+	tkLeftOp
+	tkIncOp
+	tkDecOp
+	tkPtrOp
+	tkAndOp
+	tkOrOp
+	tkLeOp
+	tkGeOp
+	tkEqOp
+	tkNeOp
+	tkSemicolon
+	tkLeftCurlyBracket
+	tkRightCurlyBracket
+	tkComma
+	tkColon
+	tkAssign
+	tkLeftParen
+	tkRightParen
+	tkLeftSquareBracket
+	tkRightSquareBracket
+	tkDot
+	tkAmpersand
+	tkBang
+	tkTilde
+	tkMinus
+	tkPlus
+	tkStar
+	tkDiv
+	tkMod
+	tkLtOp
+	tkGtOp
+	tkCarrot
+	tkPipe
+	tkQuestionMark
 )
 
 type token struct {

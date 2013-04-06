@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"unicode"
 )
@@ -13,38 +14,54 @@ const (
 	HEX_DIGITS = "abcdefABCDEF0123456789"
 )
 
-func isLetter(c rune) bool {
-	return (c >= 'a' && c <= 'z') ||
-		(c >= 'A' && c <= 'Z')
-}
-
-func isDigit(c rune) bool {
-	return c >= '0' && c <= '9'
-}
-
-func isAlphaNum(c rune) bool {
-	return isLetter(c) && isDigit(c)
-}
-
 type lexer struct {
-	name   string     // used only for error reports
 	input  string     // the string being scanned
 	start  int        // start position of this token
 	pos    int        // current position in the input
 	tokens chan token // channel of scanned token
+
+	actionMap map[string]action // map of predicate method names to actions
 }
 
-func lex(name, input string) (*lexer, chan token) {
-	l := &lexer{
-		name:   name,
-		input:  input,
-		tokens: make(chan token, 10),
+// Creates a new lexer to lex the given C code.
+//
+// param	input	The C code to lex
+//
+// returns	A pointer to the new lexer
+func newLexer(input string) *lexer {
+	tokens := make(chan token, 10)
+	actionMap := map[string]action{
+		"isWhitespace":      lexWhitespace,
+		"isBlockComment":    lexBlockComment,
+		"isCppStyleComment": lexCppStyleComment,
+		"isIdentifier":      lexIdentifier,
+		"isConstant":        lexConstant,
+		"isStringLiteral":   lexStringLiteral,
+		"isOther":           lexOther,
 	}
 
+	return &lexer{
+		input:     input,
+		tokens:    tokens,
+		actionMap: actionMap,
+	}
+}
+
+// Lexes the given C code.
+// 
+// param input	The C code to lex
+//
+// returns	A pointer to the new lexer
+//			A channel of tokens to receive from
+func lex(input string) (*lexer, chan token) {
+	l := newLexer(input)
 	go l.run()
 	return l, l.tokens
 }
 
+// Gets the next rune in the input and advances the position.
+//
+// returns	The next rune
 func (l *lexer) next() rune {
 	if l.pos >= len(l.input) {
 		return EOF
@@ -55,11 +72,24 @@ func (l *lexer) next() rune {
 	return rune(r)
 }
 
+// Gets the next rune in the input without advancing the position.
+//
+// returns	The next rune
 func (l *lexer) peek() rune {
 	if l.pos >= len(l.input) {
 		return EOF
 	}
 	return rune(l.input[l.pos])
+}
+
+func (l *lexer) peekBy(n int) string {
+	runes := make([]rune, n)
+	for i := 0; i < n; i++ {
+		runes[i] = l.next()
+	}
+	l.backupBy(n)
+
+	return string(runes)
 }
 
 // Gets the current value of the lexer
@@ -96,14 +126,19 @@ func (l *lexer) accept(valid string) bool {
 	return false
 }
 
-// consume [a-fA-F0-9]
-func (l *lexer) acceptHexDigit() bool {
-	return l.accept(HEX_DIGITS)
+// consumes characters until one not in |valid| is found
+func (l *lexer) acceptRun(valid string) int {
+	var run int
+	for strings.ContainsRune(valid, l.next()) {
+		run++
+	}
+	l.backup()
+	return run
 }
 
-// consumes characters until one not in |valid| is found
-func (l *lexer) acceptRun(valid string) {
-	for strings.ContainsRune(valid, l.next()) {
+// consume whitespace
+func (l *lexer) acceptWhitespaceRun() {
+	for unicode.IsSpace(l.next()) {
 	}
 	l.backup()
 }
@@ -123,23 +158,19 @@ func (l *lexer) peekAccept(valid string) bool {
 	return false
 }
 
-func (l *lexer) peekAcceptDigit() bool {
-	return l.peekAccept(DIGITS)
-}
-
 // peeks until char not in |valid|, returns number in |valid|
 func (l *lexer) peekAcceptRun(valid string) int {
-	var numValid int
+	var run int
 	for strings.ContainsRune(valid, l.next()) {
-		numValid++
+		run++
 	}
-	l.backupBy(numValid + 1) // We consumed at all valid plus the first invalid
-	return numValid
+	l.backupBy(run + 1) // We consumed at all valid plus the first invalid
+	return run
 }
 
 // sends an error token to the channel, then returns nil to end the state
 // function loop in run()
-func (l *lexer) errorf(format string, args ...interface{}) stateFun {
+func (l *lexer) errorf(format string, args ...interface{}) action {
 	l.tokens <- token{
 		tkError,
 		fmt.Sprintf(format, args...),
@@ -164,33 +195,43 @@ func (l *lexer) run() {
 	close(l.tokens)
 }
 
-// stateFun represents the state of the lexer as a function that returns the
+// action represents the state of the lexer as a function that returns the
 // next state
-type stateFun func(l *lexer) stateFun
+type action func(l *lexer) action
 
-func lexCode(l *lexer) stateFun {
-	if l.isComment() {
-		return lexComment
+func lexCode(l *lexer) action {
+	for c := l.peek(); c != EOF; {
+		for predStr, fun := range l.actionMap {
+			pred, ok := reflect.TypeOf(l).MethodByName(predStr)
+			if !ok {
+				panic(fmt.Sprintf("lexer method %s not found", predStr))
+			}
+
+			// This reflection is ridiculous - should probably just go back to
+			// a bunch of if statements
+			val := []reflect.Value{reflect.ValueOf(l)}
+			if pred.Func.Call(val)[0].Bool() {
+				fun(l)
+			}
+		}
 	}
 
-	if l.isIdentifier() {
-		return lexIdentifier
-	}
+	l.emit(tkEOF)
+	return nil
+}
 
-	if l.isConstant1() {
-		return lexConstant1
-	}
+func (l *lexer) isWhitespace() bool {
+	return unicode.IsSpace(l.peek())
+}
 
-	//if l.isStringLiteral() {
-	//return lexStringLiteral
-	//}
-
-	// TODO: fix this
+func lexWhitespace(l *lexer) action {
+	l.acceptWhitespaceRun()
+	l.ignore()
 	return lexCode
 }
 
 // "/*"
-func (l *lexer) isComment() bool {
+func (l *lexer) isBlockComment() bool {
 	defer l.backup() // matched by single call to next()
 
 	if c := l.next(); c == '/' {
@@ -203,8 +244,44 @@ func (l *lexer) isComment() bool {
 	return false
 }
 
-func lexComment(l *lexer) stateFun {
-	// TODO
+func lexBlockComment(l *lexer) action {
+	var c rune
+
+	l.advanceBy(2) // consume "/*"
+	for c = l.next(); c != EOF; {
+		if c == '*' {
+			for c = l.next(); c == '*'; {
+			}
+
+			if c == '/' {
+				l.ignore()
+				return lexCode
+			}
+		}
+	}
+
+	return l.errorf("unterminated comment")
+}
+
+func (l *lexer) isCppStyleComment() bool {
+	defer l.backup() // matched by single call to next()
+
+	if c := l.next(); c == '/' {
+		if c2 := l.peek(); c2 == '/' {
+			return true
+		} else {
+			return false
+		}
+	}
+	return false
+}
+
+func lexCppStyleComment(l *lexer) action {
+	l.advanceBy(2) // consume "//"
+	for c := l.next(); c != '\n' && c != EOF; {
+	}
+
+	l.ignore()
 	return lexCode
 }
 
@@ -226,7 +303,7 @@ func (l *lexer) isIdentifier() bool {
 	return false
 }
 
-func lexIdentifier(l *lexer) stateFun {
+func lexIdentifier(l *lexer) action {
 	l.accept("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 
 	switch id := l.val(); id {
@@ -262,12 +339,16 @@ func lexIdentifier(l *lexer) stateFun {
 		l.emit(tkGoto)
 	case "if":
 		l.emit(tkIf)
+	case "inline":
+		l.emit(tkInline)
 	case "int":
 		l.emit(tkInt)
 	case "long":
 		l.emit(tkLong)
 	case "register":
 		l.emit(tkRegister)
+	case "restrict":
+		l.emit(tkRestrict)
 	case "return":
 		l.emit(tkReturn)
 	case "short":
@@ -301,137 +382,227 @@ func lexIdentifier(l *lexer) stateFun {
 	return lexCode
 }
 
-// 0[xX]{H}+{IS}?
-// 0{D}+{IS}?
-// {D}+{IS}?
-// L?'(\\.|[^\\'])+'
-// {D}+{E}{FS}?	
-// {D}*"."{D}+({E})?{FS}?
-// {D}+"."{D}*({E})?{FS}?
-// where {D}  = [0-9]
-//	     {H}  = [a-zA-Z0-9]
-//		 {E}  = [Ee][+-]?{D}+
-//       {FS} = (f|F|l|L)
-//       {IS} = (u|U|l|L)*
+// See www.quut.com/c/ANSI-C-grammar-l-2011.html
 func (l *lexer) isConstant() bool {
-	// matches all but the one I don't understand (4th from the top)
-	return l.peekAcceptDigit()
+	return l.peekAccept(DIGITS) // Doesn't catch {CP}?"'"([^'\\\n]|{ES})+"'"
 }
 
-// 0[xX]{H}+{IS}?
-func lexConstant1(l *lexer) stateFun {
-	l.next() // discard 0
-	l.next() // discard [xX]
-
-	digits := "0123456789abcdefABCDEF"
-	if !l.accept(digits) {
-		return l.errorf("incomplete CONSTANT")
+// Lexes a number constant. Has very relaxed rules about what is actually legal
+// C, because gcc can deal with all that shit. All I care about is something
+// that looks number-ey, which includes, for example, the following known bugs:
+//		- Octals outside of the octal range, ex. "08"
+//		- No digits after [eE] or [pP], ex. "5.00e"
+//		- Multiple suffixes of the same type, ex. "100lLuUfF"
+func lexConstant(l *lexer) action {
+	//l.emit(tokenNumber)
+	//return lexInsideAction
+	digits := DIGITS
+	if l.accept("0") && l.accept("xX") {
+		digits = HEX_DIGITS
 	}
+
 	l.acceptRun(digits)
+	if l.accept(".") {
+		l.acceptRun(digits)
+	}
 
-	chars := "uUlL"
-	l.accept(chars)
+	if l.accept("eE") {
+		l.accept("+-")
+		l.acceptRun(DIGITS)
+	}
 
-	// regex fully parsed - look for invalid suffix (an alphanum)
+	if l.accept("pP") {
+		l.accept("+-")
+		l.acceptRun(DIGITS)
+	}
+
+	l.acceptRun("fFlLuU")
+
+	// constant fully parsed - look for invalid suffix (an alphanum)
 	if next := l.peek(); isAlphaNum(next) {
 		l.ignore()                 // discard the entire constant
 		l.acceptNonWhitespaceRun() // get the invalid suffix to report
-		return l.errorf("invalid suffix \"%s\" on hex constant", l.val())
+		return l.errorf("invalid suffix \"%s\" on constant", l.val())
 	}
 
 	l.emit(tkConstant)
-
 	return lexCode
 }
 
-// {D}+{IS}?
-func (l *lexer) isConstant2() bool {
-
+func (l *lexer) isStringLiteral() bool {
+	// TODO
+	return false
 }
 
-//func lexText(l *lexer) stateFun {
-//for {
-//if strings.HasPrefix(l.input[l.pos:], leftMeta) {
-//if l.pos > l.start {
-//l.emit(tokenText)
-//}
-//return lexLeftMeta // Next state.
-//}
-//if l.next() == eof {
-//break
-//}
-//}
+func lexStringLiteral(l *lexer) action {
+	// TODO
+	return lexCode
+}
 
-//// Correctly reached EOF.
-//if l.pos > l.start {
-//l.emit(tokenText)
-//}
-//l.emit(tokenEOF)
-//return nil
-//}
+// catchall for symbols, operators, etc.
+func (l *lexer) isOther() bool {
+	return true
+}
 
-//func lexLeftMeta(l *lexer) stateFun {
-//l.pos += len(leftMeta)
-//l.emit(tokenLeftMeta)
-//return lexInsideAction
-//}
+func lexOther(l *lexer) action {
+	switch c := l.next(); c {
+	case '.':
+		if l.peekBy(2) == ".." {
+			l.advanceBy(2)
+			l.emit(tkEllipsis)
+		} else {
+			l.emit(tkDot)
+		}
+	case '>':
+		if l.peekBy(2) == ">=" {
+			l.advanceBy(2)
+			l.emit(tkRightAssign)
+		} else if l.peek() == '>' {
+			l.advance()
+			l.emit(tkRightOp)
+		} else if l.peek() == '=' {
+			l.advance()
+			l.emit(tkGeOp)
+		} else {
+			l.emit(tkGtOp)
+		}
+	case '<':
+		if l.peekBy(2) == "<=" {
+			l.advanceBy(2)
+			l.emit(tkLeftAssign)
+		} else if l.peek() == '<' {
+			l.advance()
+			l.emit(tkLeftOp)
+		} else if l.peek() == '=' {
+			l.advance()
+			l.emit(tkLeOp)
+		} else if l.peek() == '%' {
+			l.advance()
+			l.emit(tkLeftCurlyBracket)
+		} else if l.peek() == ':' {
+			l.advance()
+			l.emit(tkLeftSquareBracket)
+		} else {
+			l.emit(tkLtOp)
+		}
+	case '+':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkAddAssign)
+		} else if l.peek() == '+' {
+			l.advance()
+			l.emit(tkIncOp)
+		} else {
+			l.emit(tkPlus)
+		}
+	case '-':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkSubAssign)
+		} else if l.peek() == '-' {
+			l.advance()
+			l.emit(tkDecOp)
+		} else if l.peek() == '>' {
+			l.advance()
+			l.emit(tkPtrOp)
+		} else {
+			l.emit(tkMinus)
+		}
+	case '*':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkMulAssign)
+		} else {
+			l.emit(tkStar)
+		}
+	case '/':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkDivAssign)
+		} else {
+			l.emit(tkDiv)
+		}
+	case '%':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkModAssign)
+		} else if l.peek() == '>' {
+			l.advance()
+			l.emit(tkRightCurlyBracket)
+		} else {
+			l.emit(tkMod)
+		}
+	case '&':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkAndAssign)
+		} else if l.peek() == '&' {
+			l.advance()
+			l.emit(tkAndOp)
+		} else {
+			l.emit(tkAmpersand)
+		}
+	case '^':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkXorAssign)
+		} else {
+			l.emit(tkCarrot)
+		}
+	case '|':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkOrAssign)
+		} else if l.peek() == '|' {
+			l.advance()
+			l.emit(tkOrOp)
+		} else {
+			l.emit(tkPipe)
+		}
+	case '=':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkEqOp)
+		} else {
+			l.emit(tkAssign)
+		}
+	case '!':
+		if l.peek() == '=' {
+			l.advance()
+			l.emit(tkNeOp)
+		} else {
+			l.emit(tkBang)
+		}
+	case ';':
+		l.emit(tkSemicolon)
+	case '{':
+		l.emit(tkLeftCurlyBracket)
+	case '}':
+		l.emit(tkLeftCurlyBracket)
+	case ',':
+		l.emit(tkComma)
+	case ':':
+		if l.peek() == '>' {
+			l.advance()
+			l.emit(tkRightSquareBracket)
+		} else {
+			l.emit(tkColon)
+		}
+	case '(':
+		l.emit(tkLeftParen)
+	case ')':
+		l.emit(tkRightParen)
+	case '[':
+		l.emit(tkLeftSquareBracket)
+	case ']':
+		l.emit(tkRightSquareBracket)
+	case '~':
+		l.emit(tkTilde)
+	case '?':
+		l.emit(tkQuestionMark)
+	default:
+		l.ignore()
+	}
 
-//func lexRightMeta(l *lexer) stateFun {
-//l.pos += len(rightMeta)
-//l.emit(tokenRightMeta)
-//return lexText
-//}
-
-//func lexInsideAction(l *lexer) stateFun {
-//// either number, quoted string, or identifier
-//// spaces separate and are ignored
-//// pipe symbols separate and are emitted
-//for {
-//if strings.HasPrefix(l.input[l.pos:], rightMeta) {
-//return lexRightMeta
-//}
-
-//r := l.next()
-//switch r {
-//case r == eof || r == '\n':
-//return l.errorf("unclosed action")
-//case isSpace(r):
-//l.ignore()
-//case r == '|':
-//l.emit(tokenPipe)
-//case r == '"':
-//return lexQuote
-//case r == '`':
-//return lexRawQuote
-//case r == '+' || r == '-' || 'O' <= r && r <= '9':
-//l.backup()
-//return lexNumber
-//case isAlphaNumeric(r):
-//l.backup()
-//return lexIdentifier
-//}
-
-//}
-//}
-
-//func lexNumber(l *lexer) stateFun {
-//l.accept("+-") // Optional leading sign
-
-//digits := "0123456789"
-//if l.accept("0") && l.accept("xX") {
-//digits = "0123456789abcdefABCDEF"
-//}
-
-//l.acceptRun(digits)
-//if l.accept(".") {
-//l.acceptRun(digits)
-//}
-
-//if l.accept("eE") {
-//l.accept("+-")
-//l.acceptRun("0123456789")
-//}
-
-//l.emit(tokenNumber)
-//return lexInsideAction
-//}
+	return lexCode
+}
