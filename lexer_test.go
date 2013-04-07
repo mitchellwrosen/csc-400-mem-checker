@@ -14,6 +14,17 @@ type S struct{}
 
 var _ = Suite(&S{})
 
+// Helper token receiver that times out after 1 second
+func receive(ch chan token) (token, bool) {
+	select {
+	case tk := <-ch:
+		return tk, true
+	case <-time.After(time.Second):
+		return token{}, false
+	}
+	panic("NOTREACHED")
+}
+
 func (s *S) TestNext(c *C) {
 	l := lexer{input: "foo"}
 
@@ -72,11 +83,10 @@ func (s *S) TestEmit(c *C) {
 	l.emit(tkConstant)
 	c.Check(l.start, Equals, l.pos)
 
-	select {
-	case tk := <-client:
+	if tk, ok := receive(client); ok {
 		c.Check(tk.typ, Equals, tkConstant)
 		c.Check(tk.val, Equals, "01234")
-	case <-time.After(time.Second):
+	} else {
 		c.Fatalf("timed out")
 	}
 
@@ -105,10 +115,9 @@ func (s *S) TestPredicates(c *C) {
 
 func (s *S) TestLexComments(c *C) {
 	_, tokenCh := lex("/* foo */\n// bar")
-	select {
-	case tk := <-tokenCh:
+	if tk, ok := receive(tokenCh); ok {
 		c.Check(tk.typ, Equals, tkEOF)
-	case <-time.After(time.Second):
+	} else {
 		c.Fatalf("timed out")
 	}
 }
@@ -134,20 +143,42 @@ func (s *S) TestLexIdentifier(c *C) {
 	_, tokenCh := lex(input)
 
 	for _, kw := range keywordTypes {
-		select {
-		case tk := <-tokenCh:
+		if tk, ok := receive(tokenCh); ok {
 			c.Check(tk.typ, Equals, kw)
-		case <-time.After(time.Second):
+		} else {
 			c.Fatalf("timed out")
 		}
 	}
 
 	for _, id := range identifiers {
-		select {
-		case tk := <-tokenCh:
+		if tk, ok := receive(tokenCh); ok {
 			c.Check(tk.typ, Equals, tkIdentifier)
 			c.Check(tk.val, Equals, id)
-		case <-time.After(1 * time.Second):
+		} else {
+			c.Fatalf("timed out")
+		}
+	}
+}
+
+func (s *S) TestConstant(c *C) {
+	// Integer constants
+	input := "0xa 0xAu 01 500L"
+	_, tokenCh := lex(input)
+	for i := 0; i < len(strings.Split(input, " ")); i++ {
+		if tk, ok := receive(tokenCh); ok {
+			c.Check(tk.typ, Equals, tkConstant)
+		} else {
+			c.Fatalf("timed out")
+		}
+	}
+
+	// Floating point constants
+	input = "5e4 5e-4 5e+4 5e4f 5e4l 0.5 .5 .5e-4l 0xF.Fp4"
+	_, tokenCh = lex(input)
+	for i := 0; i < len(strings.Split(input, " ")); i++ {
+		if tk, ok := receive(tokenCh); ok {
+			c.Check(tk.typ, Equals, tkConstant)
+		} else {
 			c.Fatalf("timed out")
 		}
 	}

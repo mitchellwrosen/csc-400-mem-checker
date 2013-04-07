@@ -388,8 +388,17 @@ func lexIdentifier(l *lexer) action {
 }
 
 // See www.quut.com/c/ANSI-C-grammar-l-2011.html
+// Doesn't catch {CP}?"'"([^'\\\n]|{ES})+"'" yet
 func (l *lexer) isConstant() bool {
-	return l.peekAccept(DIGITS) // Doesn't catch {CP}?"'"([^'\\\n]|{ES})+"'"
+	defer l.backup() // matched by single call to next()
+
+	r := l.next()
+	if strings.ContainsRune(DIGITS, r) ||
+		r == '.' && strings.ContainsRune(DIGITS, l.peek()) {
+		return true
+	}
+
+	return false
 }
 
 // Lexes a number constant. Has very relaxed rules about what is actually legal
@@ -444,7 +453,7 @@ func lexStringLiteral(l *lexer) action {
 	return lexCode
 }
 
-// catchall for symbols, operators, etc.
+// catch-all for symbols, operators, etc.
 func (l *lexer) isOther() bool {
 	return true
 }

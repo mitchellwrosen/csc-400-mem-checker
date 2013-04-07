@@ -1,9 +1,2 @@
-// asterisk is a typo?
-IS    (u|U|l|L)*
-
-// aren't these the same?
-0{D}+{IS}?        { count(); return(CONSTANT); }
-{D}+{IS}?         { count(); return(CONSTANT); }
-
 // what's this?
 L?'(\\.|[^\\'])+'    { count(); return(CONSTANT); }
