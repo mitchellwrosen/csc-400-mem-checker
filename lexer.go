@@ -95,35 +95,47 @@ func (l *lexer) backupBy(n int) {
 
 // possibly consumes a character in |valid|
 func (l *lexer) accept(valid string) bool {
-	if strings.ContainsRune(valid, l.next()) {
+	r := l.next()
+	if strings.ContainsRune(valid, r) {
 		return true
 	}
-	l.backup()
+	if r != EOF {
+		l.backup()
+	}
 	return false
 }
 
 // consumes characters until one not in |valid| is found
 func (l *lexer) acceptRun(valid string) int {
 	var run int
-	for strings.ContainsRune(valid, l.next()) {
+	var r rune
+	for r = l.next(); strings.ContainsRune(valid, r); r = l.next() {
 		run++
 	}
-	l.backup()
+	if r != EOF {
+		l.backup()
+	}
 	return run
 }
 
 // consume whitespace
 func (l *lexer) acceptWhitespaceRun() {
-	for unicode.IsSpace(l.next()) {
+	var r rune
+	for r = l.next(); unicode.IsSpace(r); r = l.next() {
 	}
-	l.backup()
+	if r != EOF {
+		l.backup()
+	}
 }
 
 // consume characters until whitespace {
 func (l *lexer) acceptNonWhitespaceRun() {
-	for !unicode.IsSpace(l.next()) {
+	var r rune
+	for r = l.next(); !unicode.IsSpace(r); r = l.next() {
 	}
-	l.backup()
+	if r != EOF {
+		l.backup()
+	}
 }
 
 // peeks, returns whether or not the char is in |valid|
@@ -137,10 +149,17 @@ func (l *lexer) peekAccept(valid string) bool {
 // peeks until char not in |valid|, returns number in |valid|
 func (l *lexer) peekAcceptRun(valid string) int {
 	var run int
-	for strings.ContainsRune(valid, l.next()) {
+	var r rune
+	for r = l.next(); strings.ContainsRune(valid, r); r = l.next() {
 		run++
 	}
-	l.backupBy(run + 1) // We consumed at all valid plus the first invalid
+
+	// We consumed at all valid plus the first invalid - first valid may have been
+	// EOF, though, in which case pos wasn't incremented.
+	l.backupBy(run)
+	if r != EOF {
+		l.backup()
+	}
 
 	return run
 }
@@ -290,7 +309,7 @@ func (l *lexer) isIdentifier() bool {
 }
 
 func lexIdentifier(l *lexer) action {
-	l.accept("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+	l.acceptRun("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 
 	switch id := l.val(); id {
 	case "auto":
