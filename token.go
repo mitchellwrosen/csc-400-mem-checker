@@ -4,10 +4,10 @@ import (
 	"fmt"
 )
 
-type tokenType int
+type TokenType int
 
 const (
-	tkEOF tokenType = iota
+	tkEOF TokenType = iota
 	tkError
 
 	tkAuto
@@ -99,7 +99,7 @@ const (
 	tkQuestionMark
 )
 
-func (t tokenType) String() string {
+func (t TokenType) String() string {
 	switch t {
 	case tkEOF:
 		return "tkEOF"
@@ -276,12 +276,12 @@ func (t tokenType) String() string {
 	panic("NOTREACHED")
 }
 
-type token struct {
-	typ tokenType
+type Token struct {
+	typ TokenType
 	val string
 }
 
-func (t token) String() string {
+func (t Token) String() string {
 	switch t.typ {
 	case tkEOF:
 		return "EOF"

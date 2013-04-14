@@ -13,32 +13,34 @@ const (
 	HEX_DIGITS = "abcdefABCDEF0123456789"
 )
 
-type lexer struct {
-	input  string     // the string being scanned
-	start  int        // start position of this token
-	pos    int        // current position in the input
-	tokens chan token // channel of scanned token
+type Lexer struct {
+	input string // the string being scanned
+
+	start int // start position of this token
+	pos   int // current position in the input
+
+	tokens []Token
 }
 
 // Lexes the given C code.
 //
-// param input	The C code to lex
+// param input	the C code to lex
 //
-// returns	A pointer to the new lexer
-//			A channel of tokens to receive from
-func lex(input string) (*lexer, chan token) {
-	l := &lexer{
+// returns	a slice of tokens
+func Lex(input string) []Token {
+	l := &Lexer{
 		input:  input,
-		tokens: make(chan token, 10),
+		tokens: make([]Token, 0, 100),
 	}
-	go l.run()
-	return l, l.tokens
+
+	l.run()
+	return l.tokens
 }
 
 // Gets the next rune in the input and advances the position.
 //
-// returns	The next rune
-func (l *lexer) next() rune {
+// returns	the next rune
+func (l *Lexer) next() rune {
 	if l.pos >= len(l.input) {
 		return EOF
 	}
@@ -51,14 +53,14 @@ func (l *lexer) next() rune {
 // Gets the next rune in the input without advancing the position.
 //
 // returns	The next rune
-func (l *lexer) peek() rune {
+func (l *Lexer) peek() rune {
 	if l.pos >= len(l.input) {
 		return EOF
 	}
 	return rune(l.input[l.pos])
 }
 
-func (l *lexer) peekBy(n int) string {
+func (l *Lexer) peekBy(n int) string {
 	runes := make([]rune, n)
 	for i := 0; i < n; i++ {
 		runes[i] = l.next()
@@ -69,32 +71,32 @@ func (l *lexer) peekBy(n int) string {
 }
 
 // Gets the current value of the lexer
-func (l *lexer) val() string {
+func (l *Lexer) val() string {
 	return l.input[l.start:l.pos]
 }
 
-func (l *lexer) ignore() {
+func (l *Lexer) ignore() {
 	l.start = l.pos
 }
 
-func (l *lexer) advance() {
+func (l *Lexer) advance() {
 	l.pos++
 }
 
-func (l *lexer) advanceBy(n int) {
+func (l *Lexer) advanceBy(n int) {
 	l.pos += n
 }
 
-func (l *lexer) backup() {
+func (l *Lexer) backup() {
 	l.pos--
 }
 
-func (l *lexer) backupBy(n int) {
+func (l *Lexer) backupBy(n int) {
 	l.pos -= n
 }
 
 // possibly consumes a character in |valid|
-func (l *lexer) accept(valid string) bool {
+func (l *Lexer) accept(valid string) bool {
 	r := l.next()
 	if strings.ContainsRune(valid, r) {
 		return true
@@ -106,7 +108,7 @@ func (l *lexer) accept(valid string) bool {
 }
 
 // consumes characters until one not in |valid| is found
-func (l *lexer) acceptRun(valid string) int {
+func (l *Lexer) acceptRun(valid string) int {
 	var run int
 	var r rune
 	for r = l.next(); strings.ContainsRune(valid, r); r = l.next() {
@@ -119,7 +121,7 @@ func (l *lexer) acceptRun(valid string) int {
 }
 
 // consume whitespace
-func (l *lexer) acceptWhitespaceRun() {
+func (l *Lexer) acceptWhitespaceRun() {
 	var r rune
 	for r = l.next(); unicode.IsSpace(r); r = l.next() {
 	}
@@ -129,7 +131,7 @@ func (l *lexer) acceptWhitespaceRun() {
 }
 
 // consume characters until whitespace {
-func (l *lexer) acceptNonWhitespaceRun() {
+func (l *Lexer) acceptNonWhitespaceRun() {
 	var r rune
 	for r = l.next(); !unicode.IsSpace(r); r = l.next() {
 	}
@@ -139,7 +141,7 @@ func (l *lexer) acceptNonWhitespaceRun() {
 }
 
 // peeks, returns whether or not the char is in |valid|
-func (l *lexer) peekAccept(valid string) bool {
+func (l *Lexer) peekAccept(valid string) bool {
 	if strings.ContainsRune(valid, l.peek()) {
 		return true
 	}
@@ -147,7 +149,7 @@ func (l *lexer) peekAccept(valid string) bool {
 }
 
 // peeks until char not in |valid|, returns number in |valid|
-func (l *lexer) peekAcceptRun(valid string) int {
+func (l *Lexer) peekAcceptRun(valid string) int {
 	var run int
 	var r rune
 	for r = l.next(); strings.ContainsRune(valid, r); r = l.next() {
@@ -164,38 +166,36 @@ func (l *lexer) peekAcceptRun(valid string) int {
 	return run
 }
 
-// sends an error token to the channel, then returns nil to end the state
+// Sends an error token to the channel, then returns nil to end the state
 // function loop in run()
-func (l *lexer) errorf(format string, args ...interface{}) action {
-	l.tokens <- token{
+func (l *Lexer) errorf(format string, args ...interface{}) action {
+	l.tokens = append(l.tokens, Token{
 		tkError,
 		fmt.Sprintf(format, args...),
-	}
+	})
 
 	return nil
 }
 
-// Emits a token to the client (parser), with value [start, pos), then advances
-// start to pos.
+// Appends a token with value [start, pos), then advances start to pos.
 //
-// param	t	The type of the token to emit.
-func (l *lexer) emit(t tokenType) {
-	l.tokens <- token{t, l.val()}
+// param	t	the type of the token to append.
+func (l *Lexer) appendToken(t TokenType) {
+	l.tokens = append(l.tokens, Token{t, l.val()})
 	l.start = l.pos
 }
 
-func (l *lexer) run() {
+func (l *Lexer) run() {
 	for state := lexCode; state != nil; {
 		state = state(l)
 	}
-	close(l.tokens)
 }
 
 // action represents the state of the lexer as a function that returns the
 // next state
-type action func(l *lexer) action
+type action func(l *Lexer) action
 
-func lexCode(l *lexer) action {
+func lexCode(l *Lexer) action {
 	if l.isEOF() {
 		return lexEOF(l)
 	} else if l.isWhitespace() {
@@ -216,27 +216,27 @@ func lexCode(l *lexer) action {
 	panic("NOTREACHED")
 }
 
-func (l *lexer) isEOF() bool {
+func (l *Lexer) isEOF() bool {
 	return l.peek() == EOF
 }
 
-func lexEOF(l *lexer) action {
-	l.emit(tkEOF)
+func lexEOF(l *Lexer) action {
+	l.appendToken(tkEOF)
 	return nil
 }
 
-func (l *lexer) isWhitespace() bool {
+func (l *Lexer) isWhitespace() bool {
 	return unicode.IsSpace(l.peek())
 }
 
-func lexWhitespace(l *lexer) action {
+func lexWhitespace(l *Lexer) action {
 	l.acceptWhitespaceRun()
 	l.ignore()
 	return lexCode
 }
 
 // "/*"
-func (l *lexer) isBlockComment() bool {
+func (l *Lexer) isBlockComment() bool {
 	defer l.backup() // matched by single call to next()
 
 	if c := l.next(); c == '/' {
@@ -249,7 +249,7 @@ func (l *lexer) isBlockComment() bool {
 	return false
 }
 
-func lexBlockComment(l *lexer) action {
+func lexBlockComment(l *Lexer) action {
 	l.advanceBy(2) // consume "/*"
 	for c := l.next(); c != EOF; c = l.next() {
 		if c == '*' {
@@ -267,7 +267,7 @@ func lexBlockComment(l *lexer) action {
 	return l.errorf("unterminated comment")
 }
 
-func (l *lexer) isCppStyleComment() bool {
+func (l *Lexer) isCppStyleComment() bool {
 	defer l.backup() // matched by single call to next()
 
 	if c := l.next(); c == '/' {
@@ -280,7 +280,7 @@ func (l *lexer) isCppStyleComment() bool {
 	return false
 }
 
-func lexCppStyleComment(l *lexer) action {
+func lexCppStyleComment(l *Lexer) action {
 	l.advanceBy(2) // consume "//"
 
 	for c := l.next(); c != '\n' && c != EOF; c = l.next() {
@@ -293,7 +293,7 @@ func lexCppStyleComment(l *lexer) action {
 // keyword, or {L}({L}|{D})* where
 // {L} = [a-zA-Z_]
 // {D} = [0-9]
-func (l *lexer) isIdentifier() bool {
+func (l *Lexer) isIdentifier() bool {
 	defer l.backup() // matched by single call to next()
 
 	if c := l.next(); isLetter(c) || c == '_' {
@@ -308,80 +308,80 @@ func (l *lexer) isIdentifier() bool {
 	return false
 }
 
-func lexIdentifier(l *lexer) action {
+func lexIdentifier(l *Lexer) action {
 	l.acceptRun("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 
 	switch id := l.val(); id {
 	case "auto":
-		l.emit(tkAuto)
+		l.appendToken(tkAuto)
 	case "break":
-		l.emit(tkBreak)
+		l.appendToken(tkBreak)
 	case "case":
-		l.emit(tkCase)
+		l.appendToken(tkCase)
 	case "char":
-		l.emit(tkChar)
+		l.appendToken(tkChar)
 	case "const":
-		l.emit(tkConst)
+		l.appendToken(tkConst)
 	case "continue":
-		l.emit(tkContinue)
+		l.appendToken(tkContinue)
 	case "default":
-		l.emit(tkDefault)
+		l.appendToken(tkDefault)
 	case "do":
-		l.emit(tkDo)
+		l.appendToken(tkDo)
 	case "double":
-		l.emit(tkDouble)
+		l.appendToken(tkDouble)
 	case "else":
-		l.emit(tkElse)
+		l.appendToken(tkElse)
 	case "enum":
-		l.emit(tkEnum)
+		l.appendToken(tkEnum)
 	case "extern":
-		l.emit(tkExtern)
+		l.appendToken(tkExtern)
 	case "float":
-		l.emit(tkFloat)
+		l.appendToken(tkFloat)
 	case "for":
-		l.emit(tkFor)
+		l.appendToken(tkFor)
 	case "goto":
-		l.emit(tkGoto)
+		l.appendToken(tkGoto)
 	case "if":
-		l.emit(tkIf)
+		l.appendToken(tkIf)
 	case "inline":
-		l.emit(tkInline)
+		l.appendToken(tkInline)
 	case "int":
-		l.emit(tkInt)
+		l.appendToken(tkInt)
 	case "long":
-		l.emit(tkLong)
+		l.appendToken(tkLong)
 	case "register":
-		l.emit(tkRegister)
+		l.appendToken(tkRegister)
 	case "restrict":
-		l.emit(tkRestrict)
+		l.appendToken(tkRestrict)
 	case "return":
-		l.emit(tkReturn)
+		l.appendToken(tkReturn)
 	case "short":
-		l.emit(tkShort)
+		l.appendToken(tkShort)
 	case "signed":
-		l.emit(tkSigned)
+		l.appendToken(tkSigned)
 	case "sizeof":
-		l.emit(tkSizeof)
+		l.appendToken(tkSizeof)
 	case "static":
-		l.emit(tkStatic)
+		l.appendToken(tkStatic)
 	case "struct":
-		l.emit(tkStruct)
+		l.appendToken(tkStruct)
 	case "switch":
-		l.emit(tkSwitch)
+		l.appendToken(tkSwitch)
 	case "typedef":
-		l.emit(tkTypedef)
+		l.appendToken(tkTypedef)
 	case "union":
-		l.emit(tkUnion)
+		l.appendToken(tkUnion)
 	case "unsigned":
-		l.emit(tkUnsigned)
+		l.appendToken(tkUnsigned)
 	case "void":
-		l.emit(tkVoid)
+		l.appendToken(tkVoid)
 	case "volatile":
-		l.emit(tkVolatile)
+		l.appendToken(tkVolatile)
 	case "while":
-		l.emit(tkWhile)
+		l.appendToken(tkWhile)
 	default:
-		l.emit(tkIdentifier)
+		l.appendToken(tkIdentifier)
 	}
 
 	return lexCode
@@ -389,7 +389,7 @@ func lexIdentifier(l *lexer) action {
 
 // See www.quut.com/c/ANSI-C-grammar-l-2011.html
 // Doesn't catch {CP}?"'"([^'\\\n]|{ES})+"'" yet
-func (l *lexer) isConstant() bool {
+func (l *Lexer) isConstant() bool {
 	defer l.backup() // matched by single call to next()
 
 	r := l.next()
@@ -407,9 +407,7 @@ func (l *lexer) isConstant() bool {
 //		- Octals outside of the octal range, ex. "08"
 //		- No digits after [eE] or [pP], ex. "5.00e"
 //		- Multiple suffixes of the same type, ex. "100lLuUfF"
-func lexConstant(l *lexer) action {
-	//l.emit(tokenNumber)
-	//return lexInsideAction
+func lexConstant(l *Lexer) action {
 	digits := DIGITS
 	if l.accept("0") && l.accept("xX") {
 		digits = HEX_DIGITS
@@ -439,181 +437,181 @@ func lexConstant(l *lexer) action {
 		return l.errorf("invalid suffix \"%s\" on constant", l.val())
 	}
 
-	l.emit(tkConstant)
+	l.appendToken(tkConstant)
 	return lexCode
 }
 
-func (l *lexer) isStringLiteral() bool {
+func (l *Lexer) isStringLiteral() bool {
 	// TODO
 	return false
 }
 
-func lexStringLiteral(l *lexer) action {
+func lexStringLiteral(l *Lexer) action {
 	// TODO
 	return lexCode
 }
 
 // catch-all for symbols, operators, etc.
-func (l *lexer) isOther() bool {
+func (l *Lexer) isOther() bool {
 	return true
 }
 
-func lexOther(l *lexer) action {
+func lexOther(l *Lexer) action {
 	switch c := l.next(); c {
 	case '.':
 		if l.peekBy(2) == ".." {
 			l.advanceBy(2)
-			l.emit(tkEllipsis)
+			l.appendToken(tkEllipsis)
 		} else {
-			l.emit(tkDot)
+			l.appendToken(tkDot)
 		}
 	case '>':
 		if l.peekBy(2) == ">=" {
 			l.advanceBy(2)
-			l.emit(tkRightAssign)
+			l.appendToken(tkRightAssign)
 		} else if l.peek() == '>' {
 			l.advance()
-			l.emit(tkRightOp)
+			l.appendToken(tkRightOp)
 		} else if l.peek() == '=' {
 			l.advance()
-			l.emit(tkGeOp)
+			l.appendToken(tkGeOp)
 		} else {
-			l.emit(tkGtOp)
+			l.appendToken(tkGtOp)
 		}
 	case '<':
 		if l.peekBy(2) == "<=" {
 			l.advanceBy(2)
-			l.emit(tkLeftAssign)
+			l.appendToken(tkLeftAssign)
 		} else if l.peek() == '<' {
 			l.advance()
-			l.emit(tkLeftOp)
+			l.appendToken(tkLeftOp)
 		} else if l.peek() == '=' {
 			l.advance()
-			l.emit(tkLeOp)
+			l.appendToken(tkLeOp)
 		} else if l.peek() == '%' {
 			l.advance()
-			l.emit(tkLeftCurlyBracket)
+			l.appendToken(tkLeftCurlyBracket)
 		} else if l.peek() == ':' {
 			l.advance()
-			l.emit(tkLeftSquareBracket)
+			l.appendToken(tkLeftSquareBracket)
 		} else {
-			l.emit(tkLtOp)
+			l.appendToken(tkLtOp)
 		}
 	case '+':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkAddAssign)
+			l.appendToken(tkAddAssign)
 		} else if l.peek() == '+' {
 			l.advance()
-			l.emit(tkIncOp)
+			l.appendToken(tkIncOp)
 		} else {
-			l.emit(tkPlus)
+			l.appendToken(tkPlus)
 		}
 	case '-':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkSubAssign)
+			l.appendToken(tkSubAssign)
 		} else if l.peek() == '-' {
 			l.advance()
-			l.emit(tkDecOp)
+			l.appendToken(tkDecOp)
 		} else if l.peek() == '>' {
 			l.advance()
-			l.emit(tkPtrOp)
+			l.appendToken(tkPtrOp)
 		} else {
-			l.emit(tkMinus)
+			l.appendToken(tkMinus)
 		}
 	case '*':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkMulAssign)
+			l.appendToken(tkMulAssign)
 		} else {
-			l.emit(tkStar)
+			l.appendToken(tkStar)
 		}
 	case '/':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkDivAssign)
+			l.appendToken(tkDivAssign)
 		} else {
-			l.emit(tkDiv)
+			l.appendToken(tkDiv)
 		}
 	case '%':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkModAssign)
+			l.appendToken(tkModAssign)
 		} else if l.peek() == '>' {
 			l.advance()
-			l.emit(tkRightCurlyBracket)
+			l.appendToken(tkRightCurlyBracket)
 		} else {
-			l.emit(tkMod)
+			l.appendToken(tkMod)
 		}
 	case '&':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkAndAssign)
+			l.appendToken(tkAndAssign)
 		} else if l.peek() == '&' {
 			l.advance()
-			l.emit(tkAndOp)
+			l.appendToken(tkAndOp)
 		} else {
-			l.emit(tkAmpersand)
+			l.appendToken(tkAmpersand)
 		}
 	case '^':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkXorAssign)
+			l.appendToken(tkXorAssign)
 		} else {
-			l.emit(tkCarrot)
+			l.appendToken(tkCarrot)
 		}
 	case '|':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkOrAssign)
+			l.appendToken(tkOrAssign)
 		} else if l.peek() == '|' {
 			l.advance()
-			l.emit(tkOrOp)
+			l.appendToken(tkOrOp)
 		} else {
-			l.emit(tkPipe)
+			l.appendToken(tkPipe)
 		}
 	case '=':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkEqOp)
+			l.appendToken(tkEqOp)
 		} else {
-			l.emit(tkAssign)
+			l.appendToken(tkAssign)
 		}
 	case '!':
 		if l.peek() == '=' {
 			l.advance()
-			l.emit(tkNeOp)
+			l.appendToken(tkNeOp)
 		} else {
-			l.emit(tkBang)
+			l.appendToken(tkBang)
 		}
 	case ';':
-		l.emit(tkSemicolon)
+		l.appendToken(tkSemicolon)
 	case '{':
-		l.emit(tkLeftCurlyBracket)
+		l.appendToken(tkLeftCurlyBracket)
 	case '}':
-		l.emit(tkLeftCurlyBracket)
+		l.appendToken(tkLeftCurlyBracket)
 	case ',':
-		l.emit(tkComma)
+		l.appendToken(tkComma)
 	case ':':
 		if l.peek() == '>' {
 			l.advance()
-			l.emit(tkRightSquareBracket)
+			l.appendToken(tkRightSquareBracket)
 		} else {
-			l.emit(tkColon)
+			l.appendToken(tkColon)
 		}
 	case '(':
-		l.emit(tkLeftParen)
+		l.appendToken(tkLeftParen)
 	case ')':
-		l.emit(tkRightParen)
+		l.appendToken(tkRightParen)
 	case '[':
-		l.emit(tkLeftSquareBracket)
+		l.appendToken(tkLeftSquareBracket)
 	case ']':
-		l.emit(tkRightSquareBracket)
+		l.appendToken(tkRightSquareBracket)
 	case '~':
-		l.emit(tkTilde)
+		l.appendToken(tkTilde)
 	case '?':
-		l.emit(tkQuestionMark)
+		l.appendToken(tkQuestionMark)
 	default:
 		l.ignore()
 	}

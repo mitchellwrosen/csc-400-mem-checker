@@ -15,18 +15,18 @@ type S struct{}
 var _ = Suite(&S{})
 
 // Helper token receiver that times out after 1 second
-func receive(ch chan token) (token, bool) {
+func receive(ch chan Token) (Token, bool) {
 	select {
 	case tk := <-ch:
 		return tk, true
 	case <-time.After(time.Second):
-		return token{}, false
+		return Token{}, false
 	}
 	panic("NOTREACHED")
 }
 
 func (s *S) TestNext(c *C) {
-	l := lexer{input: "foo"}
+	l := Lexer{input: "foo"}
 
 	c.Check(l.next(), Equals, 'f')
 	c.Check(l.next(), Equals, 'o')
@@ -35,14 +35,14 @@ func (s *S) TestNext(c *C) {
 }
 
 func (s *S) TestPeek(c *C) {
-	l := lexer{input: "foo"}
+	l := Lexer{input: "foo"}
 
 	c.Check(l.peek(), Equals, 'f')
 	c.Check(l.next(), Equals, 'f')
 }
 
 func (s *S) TestBackup(c *C) {
-	l := lexer{input: "foo"}
+	l := Lexer{input: "foo"}
 
 	l.next()   // consume f
 	l.backup() // back to f
@@ -54,7 +54,7 @@ func (s *S) TestBackup(c *C) {
 }
 
 func (s *S) TestAccept(c *C) {
-	l := lexer{input: "foofoobar"}
+	l := Lexer{input: "foofoobar"}
 
 	c.Check(l.accept("f"), Equals, true) // consume f
 	c.Check(l.peek(), Equals, 'o')
@@ -72,29 +72,26 @@ func (s *S) TestAccept(c *C) {
 
 func (s *S) TestEmit(c *C) {
 	// Artificially put lexer in a ready-to-emit state
-	client := make(chan token, 2)
-	l := lexer{
+	tokens := make([]Token, 0, 10)
+	l := Lexer{
 		input:  "012345",
 		start:  0,
 		pos:    5,
-		tokens: client,
+		tokens: tokens,
 	}
 
-	l.emit(tkConstant)
+	l.appendToken(tkConstant)
 	c.Check(l.start, Equals, l.pos)
 
-	if tk, ok := receive(client); ok {
-		c.Check(tk.typ, Equals, tkConstant)
-		c.Check(tk.val, Equals, "01234")
-	} else {
-		c.Fatalf("timed out")
-	}
+	c.Assert(len(l.tokens), Equals, 1)
+	c.Check(l.tokens[0].typ, Equals, tkConstant)
+	c.Check(l.tokens[0].val, Equals, "01234")
 
 	c.Check(l.peek(), Equals, '5')
 }
 
 func (s *S) TestPredicates(c *C) {
-	l := lexer{input: "/* foo */"}
+	l := Lexer{input: "/* foo */"}
 	c.Check(l.isBlockComment(), Equals, true)
 
 	l.input = "// foo"
@@ -114,12 +111,10 @@ func (s *S) TestPredicates(c *C) {
 }
 
 func (s *S) TestLexComments(c *C) {
-	_, tokenCh := lex("/* foo */\n// bar")
-	if tk, ok := receive(tokenCh); ok {
-		c.Check(tk.typ, Equals, tkEOF)
-	} else {
-		c.Fatalf("timed out")
-	}
+	tks := Lex("/* foo */\n// bar")
+
+	c.Assert(len(tks), Equals, 1)
+	c.Check(tks[0].typ, Equals, tkEOF)
 }
 
 func (s *S) TestLexIdentifier(c *C) {
@@ -131,7 +126,7 @@ func (s *S) TestLexIdentifier(c *C) {
 		"sizeof", "static",
 		"struct", "switch", "typedef", "union", "unsigned",
 		"void", "volatile", "while"}
-	keywordTypes := []tokenType{tkAuto, tkBreak, tkCase, tkChar, tkConst,
+	keywordTypes := []TokenType{tkAuto, tkBreak, tkCase, tkChar, tkConst,
 		tkContinue, tkDefault, tkDo, tkDouble, tkElse, tkEnum, tkExtern,
 		tkFloat, tkFor, tkGoto, tkIf, tkInline, tkInt, tkLong, tkRegister,
 		tkRestrict, tkReturn, tkShort, tkSigned, tkSizeof, tkStatic, tkStruct,
@@ -140,46 +135,43 @@ func (s *S) TestLexIdentifier(c *C) {
 	identifiers := []string{"foo", "f00", "foo_bar", "__foo__"}
 	input := strings.Join(append(keywords, identifiers...), " ")
 
-	_, tokenCh := lex(input)
+	tks := Lex(input)
 
-	for _, kw := range keywordTypes {
-		if tk, ok := receive(tokenCh); ok {
-			c.Check(tk.typ, Equals, kw)
-		} else {
-			c.Fatalf("timed out")
-		}
+	c.Assert(len(tks), Equals, len(keywords)+len(identifiers)+1)
+	for i, kw := range keywordTypes {
+		c.Check(tks[i].typ, Equals, kw)
 	}
 
-	for _, id := range identifiers {
-		if tk, ok := receive(tokenCh); ok {
-			c.Check(tk.typ, Equals, tkIdentifier)
-			c.Check(tk.val, Equals, id)
-		} else {
-			c.Fatalf("timed out")
-		}
+	shift := len(keywords)
+	for i, id := range identifiers {
+		c.Check(tks[shift+i].typ, Equals, tkIdentifier)
+		c.Check(tks[shift+i].val, Equals, id)
 	}
+
+	c.Check(tks[len(keywords)+len(identifiers)].typ, Equals, tkEOF)
 }
 
 func (s *S) TestConstant(c *C) {
 	// Integer constants
-	input := "0xa 0xAu 01 500L"
-	_, tokenCh := lex(input)
-	for i := 0; i < len(strings.Split(input, " ")); i++ {
-		if tk, ok := receive(tokenCh); ok {
-			c.Check(tk.typ, Equals, tkConstant)
-		} else {
-			c.Fatalf("timed out")
-		}
+	input := []string{"0xa", "0xAu", "01", "500L"}
+	tks := Lex(strings.Join(input, " "))
+
+	c.Assert(len(tks), Equals, 5)
+	for i := 0; i < 4; i++ {
+		c.Check(tks[i].typ, Equals, tkConstant)
+		c.Check(tks[i].val, Equals, input[i])
 	}
+	c.Check(tks[4].typ, Equals, tkEOF)
 
 	// Floating point constants
-	input = "5e4 5e-4 5e+4 5e4f 5e4l 0.5 .5 .5e-4l 0xF.Fp4"
-	_, tokenCh = lex(input)
-	for i := 0; i < len(strings.Split(input, " ")); i++ {
-		if tk, ok := receive(tokenCh); ok {
-			c.Check(tk.typ, Equals, tkConstant)
-		} else {
-			c.Fatalf("timed out")
-		}
+	input = []string{"5e4", "5e-4", "5e+4", "5e4f", "5e4l", "0.5", ".5",
+		".5e-4l", "0xF.Fp4"}
+	tks = Lex(strings.Join(input, " "))
+
+	c.Assert(len(tks), Equals, 10)
+	for i := 0; i < 9; i++ {
+		c.Check(tks[i].typ, Equals, tkConstant)
+		c.Check(tks[i].val, Equals, input[i])
 	}
+	c.Check(tks[9].typ, Equals, tkEOF)
 }
