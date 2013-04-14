@@ -28,77 +28,51 @@ func (p *Parser) next() bool {
 	return false
 }
 
-func (p *Parser) peek() Token {
-	return p.tokens[p.pos]
-}
-
-func (p *Parser) atEOF() bool {
-	return p.peek().typ == tkEOF
-}
-
-// Checks to see if the current token matches |typ|, and advances the current
-// token regardless.
-func (p *Parser) matches(typ TokenType) bool {
-	t := p.tkType()
-	p.next()
-	return t == typ
-}
-
 func (p *Parser) tkType() TokenType {
 	return p.tk.typ
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-type ParseMethod func(*Parser) bool
+type ParseMethod func(p *Parser) bool
 
-// Wraps matches(), but returns a ParseMethod (to more cleanly pass to allOf()
-func matches_(p *Parser, typ TokenType) ParseMethod {
-	return func(*Parser) bool {
-		return p.matches(typ)
+// Checks to see if the current token matches |typ|, and advances the current
+// token regardless.
+func matches(typ TokenType) ParseMethod {
+	return func(p *Parser) bool {
+		t := p.tkType()
+		p.next()
+		return t == typ
 	}
 }
 
 // Runs the |m| one or more times with receiver |p|. The parser's position will
 // be just after the last successful parse. Returns whether or not there was at
 // least one non-terminal to parse.
-func oneOrMore(p *Parser, m ParseMethod) ParseMethod {
-	return func(*Parser) bool {
+func oneOrMore(m ParseMethod) ParseMethod {
+	return func(p *Parser) bool {
 		if !m(p) {
 			return false
 		}
 
-		zeroOrMore(p, m)(p)
+		zeroOrMore(m)(p)
 		return true
 	}
 }
 
 // Runs the |m| zero or more times with receiver |p|. The parser's position will
 // be just after the last successful parse (possibly zero).
-func zeroOrMore(p *Parser, m ParseMethod) ParseMethod {
-	return func(*Parser) bool {
-		for optional(p, m)(p) {
+func zeroOrMore(m ParseMethod) ParseMethod {
+	return func(p *Parser) bool {
+		for optional(m)(p) {
 		}
 		return true
 	}
 }
 
-// Matches a non-null comma-separated list of symbols.
-func percent(p *Parser, m ParseMethod) ParseMethod {
-	return func(*Parser) bool {
-		if !m(p) {
-			return false
-		}
-
-		return zeroOrMore(p, func(*Parser) bool {
-			return p.matches(tkComma) && m(p)
-		})(p)
-	}
-}
-
 // Possibly parses using |m| on |p|. Returns whether or not anything was parsed.
-func optional(p *Parser, m ParseMethod) ParseMethod {
-	return func(*Parser) bool {
+func optional(m ParseMethod) ParseMethod {
+	return func(p *Parser) bool {
 		save := p.pos
 		if !m(p) {
 			p.pos = save
@@ -108,10 +82,26 @@ func optional(p *Parser, m ParseMethod) ParseMethod {
 	}
 }
 
+// Matches a non-null comma-separated list of symbols.
+func percent(m ParseMethod) ParseMethod {
+	return func(p *Parser) bool {
+		if !m(p) {
+			return false
+		}
+
+		return zeroOrMore(
+			allOf(
+				matches(tkComma),
+				m,
+			),
+		)(p)
+	}
+}
+
 // Tries each of |ms| in order, returns whether or not any of them were
 // successful.
-func anyOf(p *Parser, ms ...ParseMethod) ParseMethod {
-	return func(*Parser) bool {
+func anyOf(ms ...ParseMethod) ParseMethod {
+	return func(p *Parser) bool {
 		save := p.pos
 
 		for _, m := range ms {
@@ -125,8 +115,8 @@ func anyOf(p *Parser, ms ...ParseMethod) ParseMethod {
 	}
 }
 
-func allOf(p *Parser, ms ...ParseMethod) ParseMethod {
-	return func(*Parser) bool {
+func allOf(ms ...ParseMethod) ParseMethod {
+	return func(p *Parser) bool {
 		for _, m := range ms {
 			if !m(p) {
 				return false
@@ -140,8 +130,8 @@ func allOf(p *Parser, ms ...ParseMethod) ParseMethod {
 
 // (function-definition | declaration)+
 func parseTranslationUnit(p *Parser) bool {
-	return oneOrMore(p,
-		anyOf(p,
+	return oneOrMore(
+		anyOf(
 			parseFunctionDefinition,
 			parseDeclaration,
 		),
@@ -150,27 +140,27 @@ func parseTranslationUnit(p *Parser) bool {
 
 // declaration-specifiers? declarator declaration* block
 func parseFunctionDefinition(p *Parser) bool {
-	return allOf(p,
-		optional(p, parseDeclarationSpecifiers),
+	return allOf(
+		optional(parseDeclarationSpecifiers),
 		parseDeclarator,
-		zeroOrMore(p, parseDeclaration),
+		zeroOrMore(parseDeclaration),
 		parseBlock,
 	)(p)
 }
 
 // declaration-specifiers init-declarator% ";"
 func parseDeclaration(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseDeclarationSpecifiers,
-		percent(p, parseInitDeclarator),
-		matches_(p, tkSemicolon),
+		percent(parseInitDeclarator),
+		matches(tkSemicolon),
 	)(p)
 }
 
 // (storage-class-specifier | type-specifier | type-qualifier)+
 func parseDeclarationSpecifiers(p *Parser) bool {
-	return oneOrMore(p,
-		anyOf(p,
+	return oneOrMore(
+		anyOf(
 			parseStorageClassSpecifier,
 			parseTypeSpecifier,
 			parseTypeQualifier,
@@ -179,36 +169,36 @@ func parseDeclarationSpecifiers(p *Parser) bool {
 }
 
 func parseStorageClassSpecifier(p *Parser) bool {
-	return anyOf(p,
-		matches_(p, tkAuto),
-		matches_(p, tkRegister),
-		matches_(p, tkStatic),
-		matches_(p, tkExtern),
-		matches_(p, tkTypedef),
+	return anyOf(
+		matches(tkAuto),
+		matches(tkRegister),
+		matches(tkStatic),
+		matches(tkExtern),
+		matches(tkTypedef),
 	)(p)
 }
 
 func parseTypeSpecifier(p *Parser) bool {
-	return anyOf(p,
-		matches_(p, tkVoid),
-		matches_(p, tkChar),
-		matches_(p, tkShort),
-		matches_(p, tkInt),
-		matches_(p, tkLong),
-		matches_(p, tkFloat),
-		matches_(p, tkDouble),
-		matches_(p, tkSigned),
-		matches_(p, tkUnsigned),
+	return anyOf(
+		matches(tkVoid),
+		matches(tkChar),
+		matches(tkShort),
+		matches(tkInt),
+		matches(tkLong),
+		matches(tkFloat),
+		matches(tkDouble),
+		matches(tkSigned),
+		matches(tkUnsigned),
 		parseStructOrUnionSpecifier,
 		parseEnumSpecifier,
-		matches_(p, tkTypedefName),
+		matches(tkTypedefName),
 	)(p)
 }
 
 func parseTypeQualifier(p *Parser) bool {
-	return anyOf(p,
-		matches_(p, tkConst),
-		matches_(p, tkVolatile),
+	return anyOf(
+		matches(tkConst),
+		matches(tkVolatile),
 	)(p)
 }
 
@@ -216,32 +206,30 @@ func parseTypeQualifier(p *Parser) bool {
 //		identifier? "{" struct-declaration+ "}" |
 //		identifier
 func parseStructOrUnionSpecifier(p *Parser) bool {
-	return allOf(p,
-		anyOf(p,
-			matches_(p, tkStruct),
-			matches_(p, tkUnion),
+	return allOf(
+		anyOf(
+			matches(tkStruct),
+			matches(tkUnion),
 		),
-		anyOf(p,
-			allOf(p,
-				optional(p,
-					matches_(p, tkIdentifier),
-				),
-				matches_(p, tkLeftCurlyBracket),
-				oneOrMore(p, parseStructDeclaration),
-				matches_(p, tkRightCurlyBracket),
+		anyOf(
+			allOf(
+				optional(matches(tkIdentifier)),
+				matches(tkLeftCurlyBracket),
+				oneOrMore(parseStructDeclaration),
+				matches(tkRightCurlyBracket),
 			),
-			matches_(p, tkIdentifier),
+			matches(tkIdentifier),
 		),
 	)(p)
 
 }
 
 func parseInitDeclarator(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseDeclarator,
-		optional(p,
-			allOf(p,
-				matches_(p, tkAssign),
+		optional(
+			allOf(
+				matches(tkAssign),
 				parseInitializer,
 			),
 		),
@@ -250,24 +238,24 @@ func parseInitDeclarator(p *Parser) bool {
 
 // (type-specifier | type-qualifier)+ struct-declarator%
 func parseStructDeclaration(p *Parser) bool {
-	return allOf(p,
-		oneOrMore(p,
-			anyOf(p,
+	return allOf(
+		oneOrMore(
+			anyOf(
 				parseTypeSpecifier,
 				parseTypeQualifier,
 			),
 		),
-		percent(p, parseStructDeclarator),
+		percent(parseStructDeclarator),
 	)(p)
 }
 
 // declarator | declarator? ":" constant-expression
 func parseStructDeclarator(p *Parser) bool {
-	return anyOf(p,
+	return anyOf(
 		parseDeclarator,
-		allOf(p,
-			optional(p, parseDeclarator),
-			matches_(p, tkColon),
+		allOf(
+			optional(parseDeclarator),
+			matches(tkColon),
 			parseConstantExpression,
 		),
 	)(p)
@@ -275,17 +263,15 @@ func parseStructDeclarator(p *Parser) bool {
 
 // "enum" (identifier | identifier? "{" enumerator% "}")
 func parseEnumSpecifier(p *Parser) bool {
-	return allOf(p,
-		matches_(p, tkEnum),
-		anyOf(p,
-			matches_(p, tkIdentifier),
-			allOf(p,
-				optional(p,
-					matches_(p, tkIdentifier),
-				),
-				matches_(p, tkLeftCurlyBracket),
-				percent(p, parseEnumerator),
-				matches_(p, tkRightCurlyBracket),
+	return allOf(
+		matches(tkEnum),
+		anyOf(
+			matches(tkIdentifier),
+			allOf(
+				optional(matches(tkIdentifier)),
+				matches(tkLeftCurlyBracket),
+				percent(parseEnumerator),
+				matches(tkRightCurlyBracket),
 			),
 		),
 	)(p)
@@ -293,11 +279,11 @@ func parseEnumSpecifier(p *Parser) bool {
 
 // identifier ("=" constant-expression)?
 func parseEnumerator(p *Parser) bool {
-	return allOf(p,
-		matches_(p, tkIdentifier),
-		optional(p,
-			allOf(p,
-				matches_(p, tkAssign),
+	return allOf(
+		matches(tkIdentifier),
+		optional(
+			allOf(
+				matches(tkAssign),
 				parseConstantExpression,
 			),
 		),
@@ -310,36 +296,32 @@ func parseEnumerator(p *Parser) bool {
 //		"(" identifier%? ")"
 // )*
 func parseDeclarator(p *Parser) bool {
-	return allOf(p,
-		optional(p, parsePointer),
-		anyOf(p,
-			matches_(p, tkIdentifier),
-			allOf(p,
-				matches_(p, tkLeftParen),
+	return allOf(
+		optional(parsePointer),
+		anyOf(
+			matches(tkIdentifier),
+			allOf(
+				matches(tkLeftParen),
 				parseDeclarator,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 			),
 		),
-		zeroOrMore(p,
-			anyOf(p,
-				allOf(p,
-					matches_(p, tkLeftSquareBracket),
-					optional(p, parseConstantExpression),
-					matches_(p, tkRightSquareBracket),
+		zeroOrMore(
+			anyOf(
+				allOf(
+					matches(tkLeftSquareBracket),
+					optional(parseConstantExpression),
+					matches(tkRightSquareBracket),
 				),
-				allOf(p,
-					matches_(p, tkLeftParen),
+				allOf(
+					matches(tkLeftParen),
 					parseParameterTypeList,
-					matches_(p, tkRightParen),
+					matches(tkRightParen),
 				),
-				allOf(p,
-					matches_(p, tkLeftParen),
-					optional(p,
-						percent(p,
-							matches_(p, tkIdentifier),
-						),
-					),
-					matches_(p, tkRightParen),
+				allOf(
+					matches(tkLeftParen),
+					optional(percent(matches(tkIdentifier))),
+					matches(tkRightParen),
 				),
 			),
 		),
@@ -348,22 +330,22 @@ func parseDeclarator(p *Parser) bool {
 
 // ("*" type-qualifier*)*
 func parsePointer(p *Parser) bool {
-	return zeroOrMore(p,
-		allOf(p,
-			matches_(p, tkStar),
-			zeroOrMore(p, parseTypeQualifier),
+	return zeroOrMore(
+		allOf(
+			matches(tkStar),
+			zeroOrMore(parseTypeQualifier),
 		),
 	)(p)
 }
 
 // parameter-declaration% ("," "...")?
 func parseParameterTypeList(p *Parser) bool {
-	return allOf(p,
-		percent(p, parseParameterDeclaration),
-		optional(p,
-			allOf(p,
-				matches_(p, tkComma),
-				matches_(p, tkEllipsis),
+	return allOf(
+		percent(parseParameterDeclaration),
+		optional(
+			allOf(
+				matches(tkComma),
+				matches(tkEllipsis),
 			),
 		),
 	)(p)
@@ -371,10 +353,10 @@ func parseParameterTypeList(p *Parser) bool {
 
 // declaration-specifiers (declarator | abstract-declarator)?
 func parseParameterDeclaration(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseDeclarationSpecifiers,
-		optional(p,
-			anyOf(p,
+		optional(
+			anyOf(
 				parseDeclarator,
 				parseAbstractDeclarator,
 			),
@@ -384,29 +366,27 @@ func parseParameterDeclaration(p *Parser) bool {
 
 // assignment-expression | "{" initializer% ","? "}"
 func parseInitializer(p *Parser) bool {
-	return anyOf(p,
+	return anyOf(
 		parseAssignmentExpression,
-		allOf(p,
-			matches_(p, tkLeftCurlyBracket),
-			percent(p, parseInitializer),
-			optional(p,
-				matches_(p, tkComma),
-			),
-			matches_(p, tkRightCurlyBracket),
+		allOf(
+			matches(tkLeftCurlyBracket),
+			percent(parseInitializer),
+			optional(matches(tkComma)),
+			matches(tkRightCurlyBracket),
 		),
 	)(p)
 }
 
 // (type-specifier | type-qualifier)+ abstract-declarator?
 func parseTypeName(p *Parser) bool {
-	return allOf(p,
-		oneOrMore(p,
-			anyOf(p,
+	return allOf(
+		oneOrMore(
+			anyOf(
 				parseTypeSpecifier,
 				parseTypeQualifier,
 			),
 		),
-		optional(p, parseAbstractDeclarator),
+		optional(parseAbstractDeclarator),
 	)(p)
 }
 
@@ -415,26 +395,26 @@ func parseTypeName(p *Parser) bool {
 //		"(" parameter-type-list? ")"
 // )*
 func parseAbstractDeclarator(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parsePointer,
-		optional(p,
-			allOf(p,
-				matches_(p, tkLeftParen),
+		optional(
+			allOf(
+				matches(tkLeftParen),
 				parseAbstractDeclarator,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 			),
 		),
-		zeroOrMore(p,
-			anyOf(p,
-				allOf(p,
-					matches_(p, tkLeftSquareBracket),
-					optional(p, parseConstantExpression),
-					matches_(p, tkRightSquareBracket),
+		zeroOrMore(
+			anyOf(
+				allOf(
+					matches(tkLeftSquareBracket),
+					optional(parseConstantExpression),
+					matches(tkRightSquareBracket),
 				),
-				allOf(p,
-					matches_(p, tkLeftParen),
-					optional(p, parseParameterTypeList),
-					matches_(p, tkRightParen),
+				allOf(
+					matches(tkLeftParen),
+					optional(parseParameterTypeList),
+					matches(tkRightParen),
 				),
 			),
 		),
@@ -457,93 +437,93 @@ func parseAbstractDeclarator(p *Parser) bool {
 //  "return" expression? ";"
 // )
 func parseStatement(p *Parser) bool {
-	return allOf(p,
-		zeroOrMore(p,
-			allOf(p,
-				anyOf(p,
-					matches_(p, tkIdentifier),
-					allOf(p,
-						matches_(p, tkCase),
+	return allOf(
+		zeroOrMore(
+			allOf(
+				anyOf(
+					matches(tkIdentifier),
+					allOf(
+						matches(tkCase),
 						parseConstantExpression,
 					),
-					matches_(p, tkDefault),
+					matches(tkDefault),
 				),
-				matches_(p, tkColon),
+				matches(tkColon),
 			),
 		),
-		anyOf(p,
-			allOf(p,
-				optional(p, parseExpression),
-				matches_(p, tkColon),
+		anyOf(
+			allOf(
+				optional(parseExpression),
+				matches(tkColon),
 			),
 			parseBlock,
-			allOf(p,
-				matches_(p, tkIf),
-				matches_(p, tkLeftParen),
+			allOf(
+				matches(tkIf),
+				matches(tkLeftParen),
 				parseExpression,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 				parseStatement,
 			),
-			allOf(p,
-				matches_(p, tkIf),
-				matches_(p, tkLeftParen),
+			allOf(
+				matches(tkIf),
+				matches(tkLeftParen),
 				parseExpression,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 				parseStatement,
-				matches_(p, tkElse),
+				matches(tkElse),
 				parseStatement,
 			),
-			allOf(p,
-				matches_(p, tkSwitch),
-				matches_(p, tkLeftParen),
+			allOf(
+				matches(tkSwitch),
+				matches(tkLeftParen),
 				parseExpression,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 				parseStatement,
 			),
-			allOf(p,
-				matches_(p, tkWhile),
-				matches_(p, tkLeftParen),
+			allOf(
+				matches(tkWhile),
+				matches(tkLeftParen),
 				parseExpression,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 				parseStatement,
 			),
-			allOf(p,
-				matches_(p, tkDo),
+			allOf(
+				matches(tkDo),
 				parseStatement,
-				matches_(p, tkWhile),
-				matches_(p, tkLeftParen),
+				matches(tkWhile),
+				matches(tkLeftParen),
 				parseExpression,
-				matches_(p, tkRightParen),
-				matches_(p, tkSemicolon),
+				matches(tkRightParen),
+				matches(tkSemicolon),
 			),
-			allOf(p,
-				matches_(p, tkFor),
-				matches_(p, tkLeftParen),
-				optional(p, parseExpression),
-				matches_(p, tkSemicolon),
-				optional(p, parseExpression),
-				matches_(p, tkSemicolon),
-				optional(p, parseExpression),
-				matches_(p, tkRightParen),
+			allOf(
+				matches(tkFor),
+				matches(tkLeftParen),
+				optional(parseExpression),
+				matches(tkSemicolon),
+				optional(parseExpression),
+				matches(tkSemicolon),
+				optional(parseExpression),
+				matches(tkRightParen),
 				parseStatement,
 			),
-			allOf(p,
-				matches_(p, tkGoto),
-				matches_(p, tkIdentifier),
-				matches_(p, tkSemicolon),
+			allOf(
+				matches(tkGoto),
+				matches(tkIdentifier),
+				matches(tkSemicolon),
 			),
-			allOf(p,
-				matches_(p, tkContinue),
-				matches_(p, tkSemicolon),
+			allOf(
+				matches(tkContinue),
+				matches(tkSemicolon),
 			),
-			allOf(p,
-				matches_(p, tkBreak),
-				matches_(p, tkSemicolon),
+			allOf(
+				matches(tkBreak),
+				matches(tkSemicolon),
 			),
-			allOf(p,
-				matches_(p, tkReturn),
-				optional(p, parseExpression),
-				matches_(p, tkSemicolon),
+			allOf(
+				matches(tkReturn),
+				optional(parseExpression),
+				matches(tkSemicolon),
 			),
 		),
 	)(p)
@@ -551,17 +531,17 @@ func parseStatement(p *Parser) bool {
 
 // "{" declaration* statement* "}"
 func parseBlock(p *Parser) bool {
-	return allOf(p,
-		matches_(p, tkLeftCurlyBracket),
-		zeroOrMore(p, parseDeclaration),
-		zeroOrMore(p, parseStatement),
-		matches_(p, tkRightCurlyBracket),
+	return allOf(
+		matches(tkLeftCurlyBracket),
+		zeroOrMore(parseDeclaration),
+		zeroOrMore(parseStatement),
+		matches(tkRightCurlyBracket),
 	)(p)
 }
 
 // assignment-expression%
 func parseExpression(p *Parser) bool {
-	return percent(p, parseAssignmentExpression)(p)
+	return percent(parseAssignmentExpression)(p)
 }
 
 // (
@@ -570,22 +550,22 @@ func parseExpression(p *Parser) bool {
 //  )
 // )* conditional-expression
 func parseAssignmentExpression(p *Parser) bool {
-	return allOf(p,
-		zeroOrMore(p,
-			allOf(p,
+	return allOf(
+		zeroOrMore(
+			allOf(
 				parseUnaryExpression,
-				anyOf(p,
-					matches_(p, tkAssign),
-					matches_(p, tkMulAssign),
-					matches_(p, tkDivAssign),
-					matches_(p, tkModAssign),
-					matches_(p, tkAddAssign),
-					matches_(p, tkSubAssign),
-					matches_(p, tkLeftAssign),
-					matches_(p, tkRightAssign),
-					matches_(p, tkAndAssign),
-					matches_(p, tkXorAssign),
-					matches_(p, tkOrAssign),
+				anyOf(
+					matches(tkAssign),
+					matches(tkMulAssign),
+					matches(tkDivAssign),
+					matches(tkModAssign),
+					matches(tkAddAssign),
+					matches(tkSubAssign),
+					matches(tkLeftAssign),
+					matches(tkRightAssign),
+					matches(tkAndAssign),
+					matches(tkXorAssign),
+					matches(tkOrAssign),
 				),
 			),
 		),
@@ -595,13 +575,13 @@ func parseAssignmentExpression(p *Parser) bool {
 
 // logical-OR-expression ( "?" expression ":" conditional-expression )?
 func parseConditionalExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseLogicalOrExpression,
-		optional(p,
-			allOf(p,
-				matches_(p, tkQuestionMark),
+		optional(
+			allOf(
+				matches(tkQuestionMark),
 				parseExpression,
-				matches_(p, tkColon),
+				matches(tkColon),
 				parseConditionalExpression,
 			),
 		),
@@ -615,11 +595,11 @@ func parseConstantExpression(p *Parser) bool {
 
 //   logical-AND-expression ( "||" logical-AND-expression )*
 func parseLogicalOrExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseLogicalAndExpression,
-		zeroOrMore(p,
-			allOf(p,
-				matches_(p, tkOrOp),
+		zeroOrMore(
+			allOf(
+				matches(tkOrOp),
 				parseLogicalAndExpression,
 			),
 		),
@@ -628,11 +608,11 @@ func parseLogicalOrExpression(p *Parser) bool {
 
 //   inclusive-OR-expression ( "&&" inclusive-OR-expression )*
 func parseLogicalAndExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseInclusiveOrExpression,
-		zeroOrMore(p,
-			allOf(p,
-				matches_(p, tkAndOp),
+		zeroOrMore(
+			allOf(
+				matches(tkAndOp),
 				parseInclusiveOrExpression,
 			),
 		),
@@ -641,11 +621,11 @@ func parseLogicalAndExpression(p *Parser) bool {
 
 //   exclusive-OR-expression ( "|" exclusive-OR-expression )*
 func parseInclusiveOrExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseExclusiveOrExpression,
-		zeroOrMore(p,
-			allOf(p,
-				matches_(p, tkPipe),
+		zeroOrMore(
+			allOf(
+				matches(tkPipe),
 				parseExclusiveOrExpression,
 			),
 		),
@@ -654,11 +634,11 @@ func parseInclusiveOrExpression(p *Parser) bool {
 
 //   AND-expression ( "^" AND-expression )*
 func parseExclusiveOrExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseAndExpression,
-		zeroOrMore(p,
-			allOf(p,
-				matches_(p, tkCarrot),
+		zeroOrMore(
+			allOf(
+				matches(tkCarrot),
 				parseAndExpression,
 			),
 		),
@@ -667,11 +647,11 @@ func parseExclusiveOrExpression(p *Parser) bool {
 
 // equality-expression ( "&" equality-expression )*
 func parseAndExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseEqualityExpression,
-		zeroOrMore(p,
-			allOf(p,
-				matches_(p, tkAmpersand),
+		zeroOrMore(
+			allOf(
+				matches(tkAmpersand),
 				parseEqualityExpression,
 			),
 		),
@@ -680,13 +660,13 @@ func parseAndExpression(p *Parser) bool {
 
 // relational-expression ( ("==" | "!=") relational-expression )*
 func parseEqualityExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseRelationalExpression,
-		zeroOrMore(p,
-			allOf(p,
-				anyOf(p,
-					matches_(p, tkEqOp),
-					matches_(p, tkNeOp),
+		zeroOrMore(
+			allOf(
+				anyOf(
+					matches(tkEqOp),
+					matches(tkNeOp),
 				),
 				parseRelationalExpression,
 			),
@@ -696,15 +676,15 @@ func parseEqualityExpression(p *Parser) bool {
 
 // shift-expression ( ("<" | ">" | "<=" | ">=") shift-expression )*
 func parseRelationalExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseShiftExpression,
-		zeroOrMore(p,
-			allOf(p,
-				anyOf(p,
-					matches_(p, tkLtOp),
-					matches_(p, tkGtOp),
-					matches_(p, tkLeOp),
-					matches_(p, tkGeOp),
+		zeroOrMore(
+			allOf(
+				anyOf(
+					matches(tkLtOp),
+					matches(tkGtOp),
+					matches(tkLeOp),
+					matches(tkGeOp),
 				),
 				parseShiftExpression,
 			),
@@ -714,13 +694,13 @@ func parseRelationalExpression(p *Parser) bool {
 
 // additive-expression ( ("<<" | ">>") additive-expression )*
 func parseShiftExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseAdditiveExpression,
-		zeroOrMore(p,
-			allOf(p,
-				anyOf(p,
-					matches_(p, tkLeftOp),
-					matches_(p, tkRightOp),
+		zeroOrMore(
+			allOf(
+				anyOf(
+					matches(tkLeftOp),
+					matches(tkRightOp),
 				),
 				parseAdditiveExpression,
 			),
@@ -730,13 +710,13 @@ func parseShiftExpression(p *Parser) bool {
 
 // multiplicative-expression ( ("+" | "-") multiplicative-expression )*
 func parseAdditiveExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseMultiplicativeExpression,
-		zeroOrMore(p,
-			allOf(p,
-				anyOf(p,
-					matches_(p, tkPlus),
-					matches_(p, tkMinus),
+		zeroOrMore(
+			allOf(
+				anyOf(
+					matches(tkPlus),
+					matches(tkMinus),
 				),
 				parseMultiplicativeExpression,
 			),
@@ -746,14 +726,14 @@ func parseAdditiveExpression(p *Parser) bool {
 
 // cast-expression ( ("*" | "/" | "%" ) cast-expression )*
 func parseMultiplicativeExpression(p *Parser) bool {
-	return allOf(p,
+	return allOf(
 		parseCastExpression,
-		zeroOrMore(p,
-			allOf(p,
-				anyOf(p,
-					matches_(p, tkStar),
-					matches_(p, tkDiv),
-					matches_(p, tkMod),
+		zeroOrMore(
+			allOf(
+				anyOf(
+					matches(tkStar),
+					matches(tkDiv),
+					matches(tkMod),
 				),
 				parseCastExpression,
 			),
@@ -763,12 +743,12 @@ func parseMultiplicativeExpression(p *Parser) bool {
 
 // ( "(" type-name ")" )* unary-expression
 func parseCastExpression(p *Parser) bool {
-	return allOf(p,
-		zeroOrMore(p,
-			allOf(p,
-				matches_(p, tkLeftParen),
+	return allOf(
+		zeroOrMore(
+			allOf(
+				matches(tkLeftParen),
 				parseTypeName,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 			),
 		),
 		parseUnaryExpression,
@@ -781,29 +761,29 @@ func parseCastExpression(p *Parser) bool {
 //		postfix-expression
 // )
 func parseUnaryExpression(p *Parser) bool {
-	return allOf(p,
-		zeroOrMore(p,
-			allOf(p,
-				matches_(p, tkIncOp),
-				matches_(p, tkDecOp),
-				matches_(p, tkSizeof),
+	return allOf(
+		zeroOrMore(
+			allOf(
+				matches(tkIncOp),
+				matches(tkDecOp),
+				matches(tkSizeof),
 			),
 		),
-		anyOf(p,
-			allOf(p,
-				matches_(p, tkSizeof),
-				matches_(p, tkLeftParen),
+		anyOf(
+			allOf(
+				matches(tkSizeof),
+				matches(tkLeftParen),
 				parseTypeName,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 			),
-			allOf(p,
-				anyOf(p,
-					matches_(p, tkAmpersand),
-					matches_(p, tkStar),
-					matches_(p, tkPlus),
-					matches_(p, tkMinus),
-					matches_(p, tkTilde),
-					matches_(p, tkBang),
+			allOf(
+				anyOf(
+					matches(tkAmpersand),
+					matches(tkStar),
+					matches(tkPlus),
+					matches(tkMinus),
+					matches(tkTilde),
+					matches(tkBang),
 				),
 				parseCastExpression,
 			),
@@ -821,39 +801,39 @@ func parseUnaryExpression(p *Parser) bool {
 //		"--"
 // )*
 func parsePostfixExpression(p *Parser) bool {
-	allOf(p,
-		anyOf(p,
-			matches_(p, tkIdentifier),
+	allOf(
+		anyOf(
+			matches(tkIdentifier),
 			parseConstant,
-			matches_(p, tkStringLiteral),
-			allOf(p,
-				matches_(p, tkLeftParen),
+			matches(tkStringLiteral),
+			allOf(
+				matches(tkLeftParen),
 				parseExpression,
-				matches_(p, tkRightParen),
+				matches(tkRightParen),
 			),
 		),
-		zeroOrMore(p,
-			anyOf(p,
-				allOf(p,
-					matches_(p, tkLeftSquareBracket),
+		zeroOrMore(
+			anyOf(
+				allOf(
+					matches(tkLeftSquareBracket),
 					parseExpression,
-					matches_(p, tkRightSquareBracket),
+					matches(tkRightSquareBracket),
 				),
-				allOf(p,
-					matches_(p, tkLeftParen),
-					percent(p, parseAssignmentExpression),
-					matches_(p, tkRightParen),
+				allOf(
+					matches(tkLeftParen),
+					percent(parseAssignmentExpression),
+					matches(tkRightParen),
 				),
-				allOf(p,
-					matches_(p, tkDot),
-					matches_(p, tkIdentifier),
+				allOf(
+					matches(tkDot),
+					matches(tkIdentifier),
 				),
-				allOf(p,
-					matches_(p, tkPtrOp),
-					matches_(p, tkIdentifier),
+				allOf(
+					matches(tkPtrOp),
+					matches(tkIdentifier),
 				),
-				matches_(p, tkIncOp),
-				matches_(p, tkDecOp),
+				matches(tkIncOp),
+				matches(tkDecOp),
 			),
 		),
 	)(p)
@@ -861,5 +841,5 @@ func parsePostfixExpression(p *Parser) bool {
 
 // integer-constant | character-constant | floating-constant | enumeration-constant
 func parseConstant(p *Parser) bool {
-	return matches_(p, tkConstant)(p) // Only one type of constant, for now
+	return matches(tkConstant)(p) // Only one type of constant, for now
 }
