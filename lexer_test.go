@@ -4,7 +4,6 @@ import (
 	. "launchpad.net/gocheck"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Gocheck boiler plate
@@ -13,17 +12,6 @@ func Test(t *testing.T) { TestingT(t) }
 type S struct{}
 
 var _ = Suite(&S{})
-
-// Helper token receiver that times out after 1 second
-func receive(ch chan Token) (Token, bool) {
-	select {
-	case tk := <-ch:
-		return tk, true
-	case <-time.After(time.Second):
-		return Token{}, false
-	}
-	panic("NOTREACHED")
-}
 
 func (s *S) TestNext(c *C) {
 	l := Lexer{input: "foo"}
