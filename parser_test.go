@@ -107,3 +107,21 @@ func (s *S) TestAllOf(c *C) {
 	p = newParser(";foo")
 	c.Check(all(p), NotNil) // fail on partial match
 }
+
+// Nonterminals ////////////////////////////////////////////////////////////////
+
+func (s *S) TestStorageClassSpecifier(c *C) {
+	p := newParser("auto register static extern typedef")
+	for i := 0; i < 5; i++ {
+		c.Check(parseStorageClassSpecifier(p), IsNil)
+	}
+	matchTokens(c, p, tkEOF)
+}
+
+func (s *S) TestTypeQualifier(c *C) {
+	p := newParser("const volatile")
+	for i := 0; i < 2; i++ {
+		c.Check(parseTypeQualifier(p), IsNil)
+	}
+	matchTokens(c, p, tkEOF)
+}

@@ -46,10 +46,8 @@ const (
 	tkWhile
 
 	tkIdentifier
-
-	tkConstant // int constant, float constant
-
-	tkStringLiteral
+	tkConstant      // int constant, float constant
+	tkStringLiteral // TODO
 
 	tkEllipsis
 	tkRightAssign

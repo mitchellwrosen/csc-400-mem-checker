@@ -1,295 +1,89 @@
-package main
-
-import (
-	"fmt"
-)
-
-type symbol int
-
-type Parser struct {
-	tokens []Token
-	pos    int   // index into tokens
-	tk     Token // current token
-}
-
-func Parse(input string) error {
-	p := &Parser{
-		tokens: Lex(input),
-	}
-	return parseTranslationUnit(p)
-}
-
-// Advances the parser's current token
-func (p *Parser) next() {
-	p.tk = p.tokens[p.pos]
-	if p.tk.typ != tkEOF {
-		p.pos++
-	}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-type ParseMethod func(p *Parser) error
-
-// Checks to see if the current token matches |typ|, and advances the current
-// token regardless.
-func matches(typ TokenType) ParseMethod {
-	return func(p *Parser) error {
-		p.next()
-		if p.tk.typ != typ {
-			return fmt.Errorf("Expected %v (got %v)", typ, p.tk.typ)
-		}
-		return nil
-	}
-}
-
-// Possibly parses using |m| on |p|. Returns no error.
-func optional(m ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		save := p.pos
-		if m(p) != nil {
-			p.pos = save
-		}
-		return nil
-	}
-}
-
-// Runs the |m| zero or more times with receiver |p|. The parser's position will
-// be just after the last successful parse (possibly zero). Returns no error.
-func zeroOrMore(m ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		var save int
-		for save = p.pos; m(p) == nil; save = p.pos {
-		}
-		p.pos = save
-		return nil
-	}
-}
-
-// Runs the |m| one or more times with receiver |p|. The parser's position will
-// be just after the last successful parse. Returns whether or not there was at
-// least one non-terminal to parse.
-func oneOrMore(m ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		if err := m(p); err != nil {
-			return err
-		}
-
-		return zeroOrMore(m)(p)
-	}
-}
-
-// Matches a non-null comma-separated list of symbols.
-func percent(m ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		if err := m(p); err != nil {
-			return err
-		}
-
-		return zeroOrMore(
-			allOf(
-				matches(tkComma),
-				m,
-			),
-		)(p)
-	}
-}
-
-// Tries each of |ms| in order, returns whether or not any of them were
-// successful.
-func anyOf(ms ...ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		var err error
-		save := p.pos
-
-		for _, m := range ms {
-			p.pos = save
-			if err = m(p); err == nil {
-				return nil
-			}
-		}
-
-		return fmt.Errorf("Could not match any of %v", ms) // TODO fix
-	}
-}
-
-func allOf(ms ...ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		for _, m := range ms {
-			if err := m(p); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-}
+package parser
 
 ////////////////////////////////////////////////////////////////////////////////
 
 // (function-definition | declaration)+
-func parseTranslationUnit(p *Parser) error {
-	return oneOrMore(
-		anyOf(
-			parseFunctionDefinition,
-			parseDeclaration,
-		),
-	)(p)
+type translationUnitNode struct {
+	data []struct {
+		data []interface{}
+	}
 }
 
 // declaration-specifiers? declarator declaration* block
-func parseFunctionDefinition(p *Parser) (Node, error) {
-	return allOf(
-		optional(parseDeclarationSpecifiers),
-		parseDeclarator,
-		zeroOrMore(parseDeclaration),
-		parseBlock,
-	)(p)
+type functionDefinitionNode struct {
+	dspecs *declarationSpecifiersNode
+	decl   declaratorNode
+	decls  *[]declarationNode
+	blk    blockNode
 }
 
 // declaration-specifiers init-declarator% ";"
-func parseDeclaration(p *Parser) error {
-	return allOf(
-		parseDeclarationSpecifiers,
-		percent(parseInitDeclarator),
-		matches(tkSemicolon),
-	)(p)
+type declarationNode struct {
+	decls  []declarationSpecifiersNode
+	idecls []initDeclaratorNode
 }
 
 // (storage-class-specifier | type-specifier | type-qualifier)+
-func parseDeclarationSpecifiers(p *Parser) error {
-	return oneOrMore(
-		anyOf(
-			parseStorageClassSpecifier,
-			parseTypeSpecifier,
-			parseTypeQualifier,
-		),
-	)(p)
+type declarationSpecifiersNode struct {
+	data []struct {
+		data []interface{}
+	}
 }
 
-// ("auto" | "register" | "static" | "extern" | "typedef")
-func parseStorageClassSpecifier(p *Parser) error {
-	return anyOf(
-		matches(tkAuto),
-		matches(tkRegister),
-		matches(tkStatic),
-		matches(tkExtern),
-		matches(tkTypedef),
-	)(p)
-}
+// "auto" | "register" | "static" | "extern" | "typedef"
+type storageClassSpecifierNode TokenType
 
 // "void" | "char" | "short" | "int" | "long" | "float" | "double" | "signed" |
 // "unsigned" | struct-or-union-specifier | enum-specifier | typedef-name
-func parseTypeSpecifier(p *Parser) error {
-	return anyOf(
-		matches(tkVoid),
-		matches(tkChar),
-		matches(tkShort),
-		matches(tkInt),
-		matches(tkLong),
-		matches(tkFloat),
-		matches(tkDouble),
-		matches(tkSigned),
-		matches(tkUnsigned),
-		parseStructOrUnionSpecifier,
-		parseEnumSpecifier,
-		//matches(tkTypedefName), // TODO: figure out what this is
-	)(p)
+type typeSpecifierNode struct {
+	data []interface{}
 }
 
 // "const" | "volatile"
-func parseTypeQualifier(p *Parser) error {
-	return anyOf(
-		matches(tkConst),
-		matches(tkVolatile),
-	)(p)
-}
+type typeQualifierNode TokenType
 
 // ("struct" | "union") (
 //		identifier? "{" struct-declaration+ "}" |
 //		identifier
-func parseStructOrUnionSpecifier(p *Parser) error {
-	return allOf(
-		anyOf(
-			matches(tkStruct),
-			matches(tkUnion),
-		),
-		anyOf(
-			allOf(
-				optional(matches(tkIdentifier)),
-				matches(tkLeftCurlyBracket),
-				oneOrMore(parseStructDeclaration),
-				matches(tkRightCurlyBracket),
-			),
-			matches(tkIdentifier),
-		),
-	)(p)
+type structOrUnionSpecifierNode struct {
+	tk   TokenType
+	data interface{}
+}
+
+//		identifier? "{" struct-declaration+ "}" |
+type structOrUnionSpecifierNode_ struct {
+	id     *structIdentifierNode
+	sdecls []structDeclarationNode
 }
 
 // declarator ("=" initializer)?
-func parseInitDeclarator(p *Parser) error {
-	return allOf(
-		parseDeclarator,
-		optional(
-			allOf(
-				matches(tkAssign),
-				parseInitializer,
-			),
-		),
-	)(p)
+type initDeclaratorNode struct {
+	decl declaratorNode
+	ins  *[]initializerNode
 }
 
 // (type-specifier | type-qualifier)+ struct-declarator%
-func parseStructDeclaration(p *Parser) error {
-	return allOf(
-		oneOrMore(
-			anyOf(
-				parseTypeSpecifier,
-				parseTypeQualifier,
-			),
-		),
-		percent(parseStructDeclarator),
-	)(p)
+type structDeclarationNode struct {
+	mods   []interface{}
+	sdecls []structDeclarationNode
 }
 
 // declarator | declarator? ":" constant-expression
-func parseStructDeclarator(p *Parser) error {
-	return anyOf(
-		parseDeclarator,
-		allOf(
-			optional(parseDeclarator),
-			matches(tkColon),
-			parseConstantExpression,
-		),
-	)(p)
+type structDeclaratorNode struct {
+	decl *declaratorNode
+	cex  *constantExpression
 }
 
 // "enum" (identifier | identifier? "{" enumerator% "}")
-func parseEnumSpecifier(p *Parser) error {
-	return allOf(
-		matches(tkEnum),
-		anyOf(
-			matches(tkIdentifier),
-			allOf(
-				optional(matches(tkIdentifier)),
-				matches(tkLeftCurlyBracket),
-				percent(parseEnumerator),
-				matches(tkRightCurlyBracket),
-			),
-		),
-	)(p)
+type enumSpecifierNode struct {
+	id    *identifierNode
+	enums *[]enumeratorNode
 }
 
 // identifier ("=" constant-expression)?
-func parseEnumerator(p *Parser) error {
-	return allOf(
-		matches(tkIdentifier),
-		optional(
-			allOf(
-				matches(tkAssign),
-				parseConstantExpression,
-			),
-		),
-	)(p)
+type enumeratorNode struct {
+	id  identifierNode
+	cex *constantExpression
 }
 
 // pointer? (identifier | "(" declarator ")") (
@@ -297,130 +91,55 @@ func parseEnumerator(p *Parser) error {
 //		"(" parameter-type-list ")" |
 //		"(" identifier%? ")"
 // )*
-func parseDeclarator(p *Parser) error {
-	return allOf(
-		optional(parsePointer),
-		anyOf(
-			matches(tkIdentifier),
-			allOf(
-				matches(tkLeftParen),
-				parseDeclarator,
-				matches(tkRightParen),
-			),
-		),
-		zeroOrMore(
-			anyOf(
-				allOf(
-					matches(tkLeftSquareBracket),
-					optional(parseConstantExpression),
-					matches(tkRightSquareBracket),
-				),
-				allOf(
-					matches(tkLeftParen),
-					parseParameterTypeList,
-					matches(tkRightParen),
-				),
-				allOf(
-					matches(tkLeftParen),
-					optional(percent(matches(tkIdentifier))),
-					matches(tkRightParen),
-				),
-			),
-		),
-	)(p)
+type declaratorNode struct {
+	p *pointerNode
+
+	id   *identifierNode
+	decl *declaratorNode
+
+	cexs *[]constantExpressionNode
+	ptl  *parameterTypeListNode
+	ids  *[]identifierNode
 }
 
 // ("*" type-qualifier*)*
-func parsePointer(p *Parser) error {
-	return zeroOrMore(
-		allOf(
-			matches(tkStar),
-			zeroOrMore(parseTypeQualifier),
-		),
-	)(p)
+type pointerNode struct {
+	tqs *[]*typeQualifierNode // Yes, *[]*
 }
 
 // parameter-declaration% ("," "...")?
-func parseParameterTypeList(p *Parser) error {
-	return allOf(
-		percent(parseParameterDeclaration),
-		optional(
-			allOf(
-				matches(tkComma),
-				matches(tkEllipsis),
-			),
-		),
-	)(p)
+type parameterTypeListNode struct {
+	pdecls    []parameterDeclarationNode
+	isVarArgs bool
 }
 
 // declaration-specifiers (declarator | abstract-declarator)?
-func parseParameterDeclaration(p *Parser) error {
-	return allOf(
-		parseDeclarationSpecifiers,
-		optional(
-			anyOf(
-				parseDeclarator,
-				parseAbstractDeclarator,
-			),
-		),
-	)(p)
+type parameterDeclarationNode struct {
+	decls declarationSpecifiersNode
+
+	decl  *declaratorNode
+	adecl *abstractDeclaratorNode
 }
 
 // assignment-expression | "{" initializer% ","? "}"
-func parseInitializer(p *Parser) error {
-	return anyOf(
-		parseAssignmentExpression,
-		allOf(
-			matches(tkLeftCurlyBracket),
-			percent(parseInitializer),
-			optional(matches(tkComma)),
-			matches(tkRightCurlyBracket),
-		),
-	)(p)
+type initializerNode struct {
+	aex  *assignmentExpressionNode
+	inis *[]initializerNode
 }
 
 // (type-specifier | type-qualifier)+ abstract-declarator?
-func parseTypeName(p *Parser) error {
-	return allOf(
-		oneOrMore(
-			anyOf(
-				parseTypeSpecifier,
-				parseTypeQualifier,
-			),
-		),
-		optional(parseAbstractDeclarator),
-	)(p)
+type typeNameNode struct {
+	mods  []interface{}
+	adecl *abstractDeclaratorNode
 }
 
 // pointer ("(" abstract-declarator ")")? (
 //		"[" constant-expression? "]" |
 //		"(" parameter-type-list? ")"
 // )*
-func parseAbstractDeclarator(p *Parser) error {
-	return allOf(
-		parsePointer,
-		optional(
-			allOf(
-				matches(tkLeftParen),
-				parseAbstractDeclarator,
-				matches(tkRightParen),
-			),
-		),
-		zeroOrMore(
-			anyOf(
-				allOf(
-					matches(tkLeftSquareBracket),
-					optional(parseConstantExpression),
-					matches(tkRightSquareBracket),
-				),
-				allOf(
-					matches(tkLeftParen),
-					optional(parseParameterTypeList),
-					matches(tkRightParen),
-				),
-			),
-		),
-	)(p)
+type abstractDeclaratorNode struct {
+	p    pointerNode
+	data *[]interface{}
 }
 
 // ((identifier | "case" constant-expression | "default") ":")*
@@ -438,6 +157,64 @@ func parseAbstractDeclarator(p *Parser) error {
 //  "break" ";" |
 //  "return" expression? ";"
 // )
+type statementNode struct {
+	data *[]interface{}
+
+	expr  *expressionNode
+	block *blockNode
+	i     *ifNode // covers if, if-else
+	s     *switchNode
+	w     *whileNode
+	dw    *doWhileNode
+	f     *forNode
+	g     *gotoNode
+	c     *continueNode
+	b     *breakNode
+	r     *returnNode
+}
+
+type ifNode struct {
+	e  expressionNode
+	s1 statementNode
+	s2 *statementNode
+}
+
+type switchNode struct {
+	e expressionNode
+	s statementNode
+}
+
+type whileNode struct {
+	e expressionNode
+	s statementNode
+}
+
+type doWhileNode struct {
+	e expressionNode
+	s statementNode
+}
+
+type forNode struct {
+	e1 *expressionNode
+	e2 *expressionNode
+	e3 *expressionNode
+	s  statementNode
+}
+
+type gotoNode struct {
+	id identifierNode
+}
+
+type continueNode struct{}
+
+type breakNode struct{}
+
+type returnNode struct {
+	e *expressionNode
+}
+
+/* TODO: the rest, and refactor above
+
 func parseStatement(p *Parser) error {
 	return allOf(
 		zeroOrMore(
@@ -845,3 +622,5 @@ func parsePostfixExpression(p *Parser) error {
 func parseConstant(p *Parser) error {
 	return matches(tkConstant)(p) // Only one type of constant, for now
 }
+
+*/
