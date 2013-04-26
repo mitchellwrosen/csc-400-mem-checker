@@ -29,7 +29,7 @@ func (p *Parser) next() {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-type ParseMethod func(p *Parser) error
+type ParseMethod func(p *Parser) (interface{}, error)
 
 // Checks to see if the current token matches |typ|, and advances the current
 // token regardless.

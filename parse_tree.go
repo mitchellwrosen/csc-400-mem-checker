@@ -1,11 +1,10 @@
 package parser
 
-////////////////////////////////////////////////////////////////////////////////
-
 // (function-definition | declaration)+
 type translationUnitNode struct {
-	data []struct {
-		data []interface{}
+	nodes []struct {
+		fdef *functionDefinitionNode
+		decl *declarationNode
 	}
 }
 
@@ -19,14 +18,16 @@ type functionDefinitionNode struct {
 
 // declaration-specifiers init-declarator% ";"
 type declarationNode struct {
-	decls  []declarationSpecifiersNode
+	decls  declarationSpecifiersNode
 	idecls []initDeclaratorNode
 }
 
 // (storage-class-specifier | type-specifier | type-qualifier)+
 type declarationSpecifiersNode struct {
-	data []struct {
-		data []interface{}
+	nodes []struct {
+		scs *storageClassSpecifierNode
+		ts  *typeSpecifierNode
+		tq  *typeQualifierNode
 	}
 }
 
@@ -36,7 +37,12 @@ type storageClassSpecifierNode TokenType
 // "void" | "char" | "short" | "int" | "long" | "float" | "double" | "signed" |
 // "unsigned" | struct-or-union-specifier | enum-specifier | typedef-name
 type typeSpecifierNode struct {
-	data []interface{}
+	nodes []struct {
+		tk  *TokenType
+		sus *structOrUnionSpecifierNode
+		es  *enumSpecifierNode
+		tn  *typedefName
+	}
 }
 
 // "const" | "volatile"
@@ -45,45 +51,49 @@ type typeQualifierNode TokenType
 // ("struct" | "union") (
 //		identifier? "{" struct-declaration+ "}" |
 //		identifier
+// )
 type structOrUnionSpecifierNode struct {
-	tk   TokenType
-	data interface{}
-}
+	tk    TokenType
+	nodes struct {
+		id1   *Token
+		sdecl *[]structDeclarationNode
 
-//		identifier? "{" struct-declaration+ "}" |
-type structOrUnionSpecifierNode_ struct {
-	id     *structIdentifierNode
-	sdecls []structDeclarationNode
+		id2 *Token
+	}
 }
 
 // declarator ("=" initializer)?
 type initDeclaratorNode struct {
 	decl declaratorNode
-	ins  *[]initializerNode
+	i    *initializerNode
 }
 
 // (type-specifier | type-qualifier)+ struct-declarator%
 type structDeclarationNode struct {
-	mods   []interface{}
+	mods []struct {
+		ts *typeSpecifierNode
+		tq *typeQualifierNode
+	}
+
 	sdecls []structDeclarationNode
 }
 
 // declarator | declarator? ":" constant-expression
 type structDeclaratorNode struct {
 	decl *declaratorNode
-	cex  *constantExpression
+	cex  *constantExpressionNode
 }
 
 // "enum" (identifier | identifier? "{" enumerator% "}")
 type enumSpecifierNode struct {
-	id    *identifierNode
+	id    *Token
 	enums *[]enumeratorNode
 }
 
 // identifier ("=" constant-expression)?
 type enumeratorNode struct {
-	id  identifierNode
-	cex *constantExpression
+	id  Token
+	cex *constantExpressionNode
 }
 
 // pointer? (identifier | "(" declarator ")") (
@@ -94,12 +104,14 @@ type enumeratorNode struct {
 type declaratorNode struct {
 	p *pointerNode
 
-	id   *identifierNode
+	id   *Token
 	decl *declaratorNode
 
-	cexs *[]constantExpressionNode
-	ptl  *parameterTypeListNode
-	ids  *[]identifierNode
+	nodes *[]struct {
+		cex *constantExpressionNode
+		ptl *parameterTypeListNode
+		ids *[]Token
+	}
 }
 
 // ("*" type-qualifier*)*
@@ -129,7 +141,11 @@ type initializerNode struct {
 
 // (type-specifier | type-qualifier)+ abstract-declarator?
 type typeNameNode struct {
-	mods  []interface{}
+	mods []struct {
+		ts *typeSpecifierNode
+		tq *typeQualifierNode
+	}
+
 	adecl *abstractDeclaratorNode
 }
 
@@ -138,8 +154,13 @@ type typeNameNode struct {
 //		"(" parameter-type-list? ")"
 // )*
 type abstractDeclaratorNode struct {
-	p    pointerNode
-	data *[]interface{}
+	p     pointerNode
+	adecl *abstractDeclaratorNode
+
+	nodes *[]struct {
+		cex *constantExpressionNode
+		ptl *parameterTypeListNode
+	}
 }
 
 // ((identifier | "case" constant-expression | "default") ":")*
@@ -158,11 +179,15 @@ type abstractDeclaratorNode struct {
 //  "return" expression? ";"
 // )
 type statementNode struct {
-	data *[]interface{}
+	nodes *[]struct {
+		id  *Token
+		cex *constantExpressionNode
+		d   *TokenType // TK_DEFAULT
+	}
 
 	expr  *expressionNode
 	block *blockNode
-	i     *ifNode // covers if, if-else
+	i     *ifNode // if, if-else
 	s     *switchNode
 	w     *whileNode
 	dw    *doWhileNode
@@ -173,27 +198,32 @@ type statementNode struct {
 	r     *returnNode
 }
 
+// "if" "(" expression ")" statement ("else" statement)?
 type ifNode struct {
 	e  expressionNode
 	s1 statementNode
 	s2 *statementNode
 }
 
+// "switch" "(" expression ")" statement
 type switchNode struct {
 	e expressionNode
 	s statementNode
 }
 
+// "while" "(" expression ")" statement
 type whileNode struct {
 	e expressionNode
 	s statementNode
 }
 
+// "do" statement "while" "(" expression ")" ";"
 type doWhileNode struct {
 	e expressionNode
 	s statementNode
 }
 
+// "for" "(" expression? ";" expression? ";" expression? ")" statement
 type forNode struct {
 	e1 *expressionNode
 	e2 *expressionNode
@@ -201,126 +231,31 @@ type forNode struct {
 	s  statementNode
 }
 
+// "goto" identifier ";"
 type gotoNode struct {
-	id identifierNode
+	id Token
 }
 
+// "continue" ";"
 type continueNode struct{}
 
+// "break" ";"
 type breakNode struct{}
 
+// "return" expression? ";"
 type returnNode struct {
 	e *expressionNode
 }
 
-/* TODO: the rest, and refactor above
-
-func parseStatement(p *Parser) error {
-	return allOf(
-		zeroOrMore(
-			allOf(
-				anyOf(
-					matches(tkIdentifier),
-					allOf(
-						matches(tkCase),
-						parseConstantExpression,
-					),
-					matches(tkDefault),
-				),
-				matches(tkColon),
-			),
-		),
-		anyOf(
-			allOf(
-				optional(parseExpression),
-				matches(tkColon),
-			),
-			parseBlock,
-			allOf(
-				matches(tkIf),
-				matches(tkLeftParen),
-				parseExpression,
-				matches(tkRightParen),
-				parseStatement,
-			),
-			allOf(
-				matches(tkIf),
-				matches(tkLeftParen),
-				parseExpression,
-				matches(tkRightParen),
-				parseStatement,
-				matches(tkElse),
-				parseStatement,
-			),
-			allOf(
-				matches(tkSwitch),
-				matches(tkLeftParen),
-				parseExpression,
-				matches(tkRightParen),
-				parseStatement,
-			),
-			allOf(
-				matches(tkWhile),
-				matches(tkLeftParen),
-				parseExpression,
-				matches(tkRightParen),
-				parseStatement,
-			),
-			allOf(
-				matches(tkDo),
-				parseStatement,
-				matches(tkWhile),
-				matches(tkLeftParen),
-				parseExpression,
-				matches(tkRightParen),
-				matches(tkSemicolon),
-			),
-			allOf(
-				matches(tkFor),
-				matches(tkLeftParen),
-				optional(parseExpression),
-				matches(tkSemicolon),
-				optional(parseExpression),
-				matches(tkSemicolon),
-				optional(parseExpression),
-				matches(tkRightParen),
-				parseStatement,
-			),
-			allOf(
-				matches(tkGoto),
-				matches(tkIdentifier),
-				matches(tkSemicolon),
-			),
-			allOf(
-				matches(tkContinue),
-				matches(tkSemicolon),
-			),
-			allOf(
-				matches(tkBreak),
-				matches(tkSemicolon),
-			),
-			allOf(
-				matches(tkReturn),
-				optional(parseExpression),
-				matches(tkSemicolon),
-			),
-		),
-	)(p)
-}
-
 // "{" declaration* statement* "}"
-func parseBlock(p *Parser) error {
-	return allOf(
-		matches(tkLeftCurlyBracket),
-		zeroOrMore(parseDeclaration),
-		zeroOrMore(parseStatement),
-		matches(tkRightCurlyBracket),
-	)(p)
+type blockNode struct {
+	decls *[]declarationNode
+	ss    *[]statementNode
 }
 
 // assignment-expression%
-func parseExpression(p *Parser) error {
-	return percent(parseAssignmentExpression)(p)
+type expressionNode struct {
+	aexs []assignmentExpressionNode
 }
 
 // (
@@ -328,210 +263,101 @@ func parseExpression(p *Parser) error {
 //	 "=" | "*=" | "/=" | "%=" | "+=" | "-=" | "<<=" | ">>=" | "&=" | "^=" | "|="
 //  )
 // )* conditional-expression
-func parseAssignmentExpression(p *Parser) error {
-	return allOf(
-		zeroOrMore(
-			allOf(
-				parseUnaryExpression,
-				anyOf(
-					matches(tkAssign),
-					matches(tkMulAssign),
-					matches(tkDivAssign),
-					matches(tkModAssign),
-					matches(tkAddAssign),
-					matches(tkSubAssign),
-					matches(tkLeftAssign),
-					matches(tkRightAssign),
-					matches(tkAndAssign),
-					matches(tkXorAssign),
-					matches(tkOrAssign),
-				),
-			),
-		),
-		parseConditionalExpression,
-	)(p)
+type assignmentExpressionNode struct {
+	exprs *[]struct {
+		uex unaryExpressionNode
+		tk  TokenType
+	}
+
+	cex conditionalExpressionNode
 }
 
 // logical-OR-expression ( "?" expression ":" conditional-expression )?
-func parseConditionalExpression(p *Parser) error {
-	return allOf(
-		parseLogicalOrExpression,
-		optional(
-			allOf(
-				matches(tkQuestionMark),
-				parseExpression,
-				matches(tkColon),
-				parseConditionalExpression,
-			),
-		),
-	)(p)
+type conditionalExpressionNode struct {
+	loex logicalOrExpressionNode
+	e    *expressionNode
+	cex  *conditionalExpressionNode
 }
 
 // conditional-expression
-func parseConstantExpression(p *Parser) error {
-	return parseConditionalExpression(p)
+type constantExpressionNode struct {
+	cex conditionalExpressionNode
 }
 
-//   logical-AND-expression ( "||" logical-AND-expression )*
-func parseLogicalOrExpression(p *Parser) error {
-	return allOf(
-		parseLogicalAndExpression,
-		zeroOrMore(
-			allOf(
-				matches(tkOrOp),
-				parseLogicalAndExpression,
-			),
-		),
-	)(p)
+// logical-AND-expression ( "||" logical-AND-expression )*
+type logicalOrExpressionNode struct {
+	laexs []logicalAndExpressionNode
 }
 
 //   inclusive-OR-expression ( "&&" inclusive-OR-expression )*
-func parseLogicalAndExpression(p *Parser) error {
-	return allOf(
-		parseInclusiveOrExpression,
-		zeroOrMore(
-			allOf(
-				matches(tkAndOp),
-				parseInclusiveOrExpression,
-			),
-		),
-	)(p)
+type logicalAndExpressionNode struct {
+	ioexs []inclusiveOrExpressionNode
 }
 
 //   exclusive-OR-expression ( "|" exclusive-OR-expression )*
-func parseInclusiveOrExpression(p *Parser) error {
-	return allOf(
-		parseExclusiveOrExpression,
-		zeroOrMore(
-			allOf(
-				matches(tkPipe),
-				parseExclusiveOrExpression,
-			),
-		),
-	)(p)
+type inclusiveOrExpressionNode struct {
+	eoexs []exclusiveOrExpressionNode
 }
 
 //   AND-expression ( "^" AND-expression )*
-func parseExclusiveOrExpression(p *Parser) error {
-	return allOf(
-		parseAndExpression,
-		zeroOrMore(
-			allOf(
-				matches(tkCarrot),
-				parseAndExpression,
-			),
-		),
-	)(p)
+type exclusiveOrExpressionNode struct {
+	aexs []andExpressionNode
 }
 
 // equality-expression ( "&" equality-expression )*
-func parseAndExpression(p *Parser) error {
-	return allOf(
-		parseEqualityExpression,
-		zeroOrMore(
-			allOf(
-				matches(tkAmpersand),
-				parseEqualityExpression,
-			),
-		),
-	)(p)
+type andExpressionNode struct {
+	eqexs []equalityExpressionNode
 }
 
 // relational-expression ( ("==" | "!=") relational-expression )*
-func parseEqualityExpression(p *Parser) error {
-	return allOf(
-		parseRelationalExpression,
-		zeroOrMore(
-			allOf(
-				anyOf(
-					matches(tkEqOp),
-					matches(tkNeOp),
-				),
-				parseRelationalExpression,
-			),
-		),
-	)(p)
+type equalityExpressionNode struct {
+	rex  relationalExpressionNode
+	rexs []struct {
+		tk  TokenType
+		rex relationalExpressionNode
+	}
 }
 
 // shift-expression ( ("<" | ">" | "<=" | ">=") shift-expression )*
-func parseRelationalExpression(p *Parser) error {
-	return allOf(
-		parseShiftExpression,
-		zeroOrMore(
-			allOf(
-				anyOf(
-					matches(tkLtOp),
-					matches(tkGtOp),
-					matches(tkLeOp),
-					matches(tkGeOp),
-				),
-				parseShiftExpression,
-			),
-		),
-	)(p)
+type relationalExpressionNode struct {
+	sex  shiftExpressionNode
+	sexs []struct {
+		tk  TokenType
+		sex shiftExpressionNode
+	}
 }
 
 // additive-expression ( ("<<" | ">>") additive-expression )*
-func parseShiftExpression(p *Parser) error {
-	return allOf(
-		parseAdditiveExpression,
-		zeroOrMore(
-			allOf(
-				anyOf(
-					matches(tkLeftOp),
-					matches(tkRightOp),
-				),
-				parseAdditiveExpression,
-			),
-		),
-	)(p)
+type shiftExpressionNode struct {
+	aex  additiveExpressionNode
+	aexs []struct {
+		tk  TokenType
+		aex additiveExpressionNode
+	}
 }
 
 // multiplicative-expression ( ("+" | "-") multiplicative-expression )*
-func parseAdditiveExpression(p *Parser) error {
-	return allOf(
-		parseMultiplicativeExpression,
-		zeroOrMore(
-			allOf(
-				anyOf(
-					matches(tkPlus),
-					matches(tkMinus),
-				),
-				parseMultiplicativeExpression,
-			),
-		),
-	)(p)
+type additiveExpressionNode struct {
+	mex  multiplicativeExpressionNode
+	mexs []struct {
+		tk  TokenType
+		mex multiplicativeExpressionNode
+	}
 }
 
 // cast-expression ( ("*" | "/" | "%" ) cast-expression )*
-func parseMultiplicativeExpression(p *Parser) error {
-	return allOf(
-		parseCastExpression,
-		zeroOrMore(
-			allOf(
-				anyOf(
-					matches(tkStar),
-					matches(tkDiv),
-					matches(tkMod),
-				),
-				parseCastExpression,
-			),
-		),
-	)(p)
+type multiplicativeExpressionNode struct {
+	cex  castExpressionNode
+	cexs []struct {
+		tk  TokenType
+		cex castExpressionNode
+	}
 }
 
 // ( "(" type-name ")" )* unary-expression
-func parseCastExpression(p *Parser) error {
-	return allOf(
-		zeroOrMore(
-			allOf(
-				matches(tkLeftParen),
-				parseTypeName,
-				matches(tkRightParen),
-			),
-		),
-		parseUnaryExpression,
-	)(p)
+type castExpressionNode struct {
+	tns *[]typeNameNode
+	uex unaryExpressionNode
 }
 
 // ("++" | "--" | "sizeof" )* (
@@ -539,36 +365,15 @@ func parseCastExpression(p *Parser) error {
 //		("&" | "*" | "+" | "-" | "~" | "!" ) cast-expression |
 //		postfix-expression
 // )
-func parseUnaryExpression(p *Parser) error {
-	return allOf(
-		zeroOrMore(
-			allOf(
-				matches(tkIncOp),
-				matches(tkDecOp),
-				matches(tkSizeof),
-			),
-		),
-		anyOf(
-			allOf(
-				matches(tkSizeof),
-				matches(tkLeftParen),
-				parseTypeName,
-				matches(tkRightParen),
-			),
-			allOf(
-				anyOf(
-					matches(tkAmpersand),
-					matches(tkStar),
-					matches(tkPlus),
-					matches(tkMinus),
-					matches(tkTilde),
-					matches(tkBang),
-				),
-				parseCastExpression,
-			),
-			parsePostfixExpression,
-		),
-	)(p)
+type unaryExpressionNode struct {
+	tks *[]TokenType
+
+	tn *typeNameNode // sizeof this
+
+	tk  *TokenType // for cast expression
+	cex *castExpressionNode
+
+	pex *postfixExpressionNode
 }
 
 // (identifier | constant | string | "(" expression ")") (
@@ -579,48 +384,17 @@ func parseUnaryExpression(p *Parser) error {
 //		"++"                           |
 //		"--"
 // )*
-func parsePostfixExpression(p *Parser) error {
-	return allOf(
-		anyOf(
-			matches(tkIdentifier),
-			parseConstant,
-			matches(tkStringLiteral),
-			allOf(
-				matches(tkLeftParen),
-				parseExpression,
-				matches(tkRightParen),
-			),
-		),
-		zeroOrMore(
-			anyOf(
-				allOf(
-					matches(tkLeftSquareBracket),
-					parseExpression,
-					matches(tkRightSquareBracket),
-				),
-				allOf(
-					matches(tkLeftParen),
-					percent(parseAssignmentExpression),
-					matches(tkRightParen),
-				),
-				allOf(
-					matches(tkDot),
-					matches(tkIdentifier),
-				),
-				allOf(
-					matches(tkPtrOp),
-					matches(tkIdentifier),
-				),
-				matches(tkIncOp),
-				matches(tkDecOp),
-			),
-		),
-	)(p)
-}
+type postfixExpressionNode struct {
+	id  *Token
+	c   *Token
+	str *Token
+	e   *expressionNode
 
-// integer-constant | character-constant | floating-constant | enumeration-constant
-func parseConstant(p *Parser) error {
-	return matches(tkConstant)(p) // Only one type of constant, for now
-}
+	data *[]struct {
+		e    *expressoinNode
+		aexs *[]assignmentExpressionNode
 
-*/
+		tk *TokenType // . -> ++ --
+		id *Token
+	}
+}
