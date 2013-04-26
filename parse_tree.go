@@ -1,4 +1,4 @@
-package parser
+package main
 
 // (function-definition | declaration)+
 type translationUnitNode struct {
@@ -41,7 +41,7 @@ type typeSpecifierNode struct {
 		tk  *TokenType
 		sus *structOrUnionSpecifierNode
 		es  *enumSpecifierNode
-		tn  *typedefName
+		//tn  *typedefNameNode // TODO: uncomment
 	}
 }
 
@@ -391,7 +391,7 @@ type postfixExpressionNode struct {
 	e   *expressionNode
 
 	data *[]struct {
-		e    *expressoinNode
+		e    *expressionNode
 		aexs *[]assignmentExpressionNode
 
 		tk *TokenType // . -> ++ --

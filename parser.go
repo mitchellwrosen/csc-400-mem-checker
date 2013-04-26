@@ -34,35 +34,47 @@ type ParseMethod func(p *Parser) (interface{}, error)
 // Checks to see if the current token matches |typ|, and advances the current
 // token regardless.
 func matches(typ TokenType) ParseMethod {
-	return func(p *Parser) error {
+	return func(p *Parser) (interface{}, error) {
 		p.next()
 		if p.tk.typ != typ {
-			return fmt.Errorf("Expected %v (got %v)", typ, p.tk.typ)
+			return nil, fmt.Errorf("Expected %v (got %v)", typ, p.tk.typ)
 		}
-		return nil
+		return typ, nil
 	}
 }
 
 // Possibly parses using |m| on |p|. Returns no error.
 func optional(m ParseMethod) ParseMethod {
-	return func(p *Parser) error {
+	return func(p *Parser) (interface{}, error) {
 		save := p.pos
-		if m(p) != nil {
+		node, err := m(p)
+		if err != nil {
 			p.pos = save
 		}
-		return nil
+		return node, nil
 	}
 }
 
 // Runs the |m| zero or more times with receiver |p|. The parser's position will
 // be just after the last successful parse (possibly zero). Returns no error.
 func zeroOrMore(m ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		var save int
-		for save = p.pos; m(p) == nil; save = p.pos {
+	return func(p *Parser) (interface{}, error) {
+		nodes := make([]interface{}, 0, 1)
+		save := p.pos
+		for ; ; save = p.pos {
+			node, err := m(p)
+			if err != nil {
+				break
+			}
+			nodes = append(nodes, node)
 		}
 		p.pos = save
-		return nil
+
+		// Made nodes already, backpedal if nothing was added to it
+		if len(nodes) == 0 {
+			return nil, nil
+		}
+		return nodes, nil
 	}
 }
 
@@ -70,57 +82,95 @@ func zeroOrMore(m ParseMethod) ParseMethod {
 // be just after the last successful parse. Returns whether or not there was at
 // least one non-terminal to parse.
 func oneOrMore(m ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		if err := m(p); err != nil {
-			return err
+	return func(p *Parser) (interface{}, error) {
+		nodes := make([]interface{}, 0, 1)
+
+		node, err := m(p)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, node)
+
+		nodes2, err := zeroOrMore(m)(p)
+		if err != nil {
+			return nil, err
 		}
 
-		return zeroOrMore(m)(p)
+		if nodes2 != nil {
+			nodes = append(nodes, nodes2.([]interface{})...)
+		}
+
+		return nodes, nil
 	}
 }
 
 // Matches a non-null comma-separated list of symbols.
 func percent(m ParseMethod) ParseMethod {
-	return func(p *Parser) error {
-		if err := m(p); err != nil {
-			return err
+	return func(p *Parser) (interface{}, error) {
+		nodes := make([]interface{}, 0, 1)
+
+		node, err := m(p)
+		if err != nil {
+			return nil, err
 		}
 
-		return zeroOrMore(
+		nodes2, err := zeroOrMore(
 			allOf(
 				matches(tkComma),
 				m,
 			),
 		)(p)
+
+		if err != nil {
+			return nil, err
+		}
+
+		if nodes2 != nil {
+			// nodes2 is []interface{}, where each elem is a []interface{} of
+			// length 2, with [0] == tkComma, [1] == node. Extract the nodes.
+			nodes3 := make([]interface{}, 0, len(nodes2.([]interface{})))
+			for _, n := range nodes2.([]interface{}) {
+				nodes3 = append(nodes3, n.([]interface{})[1])
+			}
+			nodes = append(nodes, nodes3...)
+		}
+
+		return nodes, nil
 	}
 }
 
 // Tries each of |ms| in order, returns whether or not any of them were
 // successful.
 func anyOf(ms ...ParseMethod) ParseMethod {
-	return func(p *Parser) error {
+	return func(p *Parser) (interface{}, error) {
 		var err error
 		save := p.pos
 
 		for _, m := range ms {
 			p.pos = save
-			if err = m(p); err == nil {
-				return nil
+
+			node, err := m(p)
+			if err == nil {
+				return node, nil
 			}
 		}
 
-		return fmt.Errorf("Could not match any of %v", ms) // TODO fix
+		return nil, fmt.Errorf("Could not match any of %v", ms) // TODO fix
 	}
 }
 
 func allOf(ms ...ParseMethod) ParseMethod {
-	return func(p *Parser) error {
+	return func(p *Parser) (interface{}, error) {
+		nodes := make([]interface{}, 0, len(ms))
+
 		for _, m := range ms {
-			if err := m(p); err != nil {
-				return err
+			node, err := m(p)
+			if err != nil {
+				return nil, err
 			}
+			nodes = append(nodes, node)
 		}
-		return nil
+		return nodes, nil
 	}
 }
 
