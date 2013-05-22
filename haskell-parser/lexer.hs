@@ -38,9 +38,11 @@ data Token = TK_EOF
            | TK_VOID
            | TK_VOLATILE
            | TK_WHILE
+
            | TK_IDENTIFIER String
            | TK_CONSTANT String
            | TK_STRING_LITERAL String
+
            | TK_ELLIPSIS
            | TK_RIGHT_ASSIGN
            | TK_LEFT_ASSIGN
@@ -74,17 +76,17 @@ data Token = TK_EOF
            | TK_LEFT_SQUARE_BRACKET
            | TK_RIGHT_SQUARE_BRACKET
            | TK_DOT
-           | TK_AMPERSAND
-           | TK_BANG
+           | TK_AMP
+           | TK_NOT
            | TK_TILDE
            | TK_MINUS
            | TK_PLUS
-           | TK_STAR
+           | TK_TIMES
            | TK_DIV
            | TK_MOD
            | TK_LT_OP
            | TK_GT_OP
-           | TK_CARROT
+           | TK_XOR
            | TK_PIPE
            | TK_QUESTION_MARK
            deriving Show
@@ -144,7 +146,7 @@ next xs@(x:xt)
       else (TK_MINUS, xt)
    | x == '*' =
       if "=" `isPrefixOf` xt then (TK_MUL_ASSIGN, drop 2 xs)
-      else (TK_STAR, xt)
+      else (TK_TIMES, xt)
    | x == '/' =
       if "=" `isPrefixOf` xt then (TK_DIV_ASSIGN, drop 2 xs)
       else (TK_DIV, xt)
@@ -155,10 +157,10 @@ next xs@(x:xt)
    | x == '&' =
       if "=" `isPrefixOf` xt then (TK_AND_ASSIGN, drop 2 xs)
       else if "&" `isPrefixOf` xt then (TK_AND_OP, drop 2 xs)
-      else (TK_AMPERSAND, xt)
+      else (TK_AMP, xt)
    | x == '^' =
       if "=" `isPrefixOf` xt then (TK_XOR_ASSIGN, drop 2 xs)
-      else (TK_CARROT, xt)
+      else (TK_XOR, xt)
    | x == '|' =
       if "=" `isPrefixOf` xt then (TK_OR_ASSIGN, drop 2 xs)
       else if "|" `isPrefixOf` xt then (TK_OR_OP, drop 2 xs)
@@ -168,7 +170,7 @@ next xs@(x:xt)
       else (TK_ASSIGN, xt)
    | x == '!' =
       if "=" `isPrefixOf` xt then (TK_NE_OP, drop 2 xs)
-      else (TK_BANG, xt)
+      else (TK_NOT, xt)
    | x == ';' = (TK_SEMICOLON, xt)
    | x == '{' = (TK_LEFT_CURLY_BRACKET, xt)
    | x == '}' = (TK_RIGHT_CURLY_BRACKET, xt)

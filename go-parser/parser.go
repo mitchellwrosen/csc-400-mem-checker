@@ -12,7 +12,7 @@ type Parser struct {
 	tk     Token // current token
 }
 
-func Parse(input string) error {
+func Parse(input string) (interface{}, error) {
 	p := &Parser{
 		tokens: Lex(input),
 	}
@@ -50,6 +50,7 @@ func optional(m ParseMethod) ParseMethod {
 		node, err := m(p)
 		if err != nil {
 			p.pos = save
+			return nil, nil
 		}
 		return node, nil
 	}
@@ -113,6 +114,7 @@ func percent(m ParseMethod) ParseMethod {
 		if err != nil {
 			return nil, err
 		}
+		nodes = append(nodes, node)
 
 		nodes2, err := zeroOrMore(
 			allOf(
@@ -143,7 +145,6 @@ func percent(m ParseMethod) ParseMethod {
 // successful.
 func anyOf(ms ...ParseMethod) ParseMethod {
 	return func(p *Parser) (interface{}, error) {
-		var err error
 		save := p.pos
 
 		for _, m := range ms {
@@ -177,17 +178,22 @@ func allOf(ms ...ParseMethod) ParseMethod {
 ////////////////////////////////////////////////////////////////////////////////
 
 // (function-definition | declaration)+
-func parseTranslationUnit(p *Parser) error {
-	return oneOrMore(
+func parseTranslationUnit(p *Parser) (interface{}, error) {
+	nodes, err := oneOrMore(
 		anyOf(
 			parseFunctionDefinition,
 			parseDeclaration,
 		),
 	)(p)
+	if err != nil {
+		return nil, err
+	}
+
+	return toTranslationUnit(nodes), nil
 }
 
 // declaration-specifiers? declarator declaration* block
-func parseFunctionDefinition(p *Parser) (Node, error) {
+func parseFunctionDefinition(p *Parser) (interface{}, error) {
 	return allOf(
 		optional(parseDeclarationSpecifiers),
 		parseDeclarator,
@@ -197,7 +203,7 @@ func parseFunctionDefinition(p *Parser) (Node, error) {
 }
 
 // declaration-specifiers init-declarator% ";"
-func parseDeclaration(p *Parser) error {
+func parseDeclaration(p *Parser) (interface{}, error) {
 	return allOf(
 		parseDeclarationSpecifiers,
 		percent(parseInitDeclarator),
@@ -206,7 +212,7 @@ func parseDeclaration(p *Parser) error {
 }
 
 // (storage-class-specifier | type-specifier | type-qualifier)+
-func parseDeclarationSpecifiers(p *Parser) error {
+func parseDeclarationSpecifiers(p *Parser) (interface{}, error) {
 	return oneOrMore(
 		anyOf(
 			parseStorageClassSpecifier,
@@ -217,7 +223,7 @@ func parseDeclarationSpecifiers(p *Parser) error {
 }
 
 // ("auto" | "register" | "static" | "extern" | "typedef")
-func parseStorageClassSpecifier(p *Parser) error {
+func parseStorageClassSpecifier(p *Parser) (interface{}, error) {
 	return anyOf(
 		matches(tkAuto),
 		matches(tkRegister),
@@ -229,7 +235,7 @@ func parseStorageClassSpecifier(p *Parser) error {
 
 // "void" | "char" | "short" | "int" | "long" | "float" | "double" | "signed" |
 // "unsigned" | struct-or-union-specifier | enum-specifier | typedef-name
-func parseTypeSpecifier(p *Parser) error {
+func parseTypeSpecifier(p *Parser) (interface{}, error) {
 	return anyOf(
 		matches(tkVoid),
 		matches(tkChar),
@@ -247,7 +253,7 @@ func parseTypeSpecifier(p *Parser) error {
 }
 
 // "const" | "volatile"
-func parseTypeQualifier(p *Parser) error {
+func parseTypeQualifier(p *Parser) (interface{}, error) {
 	return anyOf(
 		matches(tkConst),
 		matches(tkVolatile),
@@ -257,7 +263,7 @@ func parseTypeQualifier(p *Parser) error {
 // ("struct" | "union") (
 //		identifier? "{" struct-declaration+ "}" |
 //		identifier
-func parseStructOrUnionSpecifier(p *Parser) error {
+func parseStructOrUnionSpecifier(p *Parser) (interface{}, error) {
 	return allOf(
 		anyOf(
 			matches(tkStruct),
@@ -276,7 +282,7 @@ func parseStructOrUnionSpecifier(p *Parser) error {
 }
 
 // declarator ("=" initializer)?
-func parseInitDeclarator(p *Parser) error {
+func parseInitDeclarator(p *Parser) (interface{}, error) {
 	return allOf(
 		parseDeclarator,
 		optional(
@@ -289,7 +295,7 @@ func parseInitDeclarator(p *Parser) error {
 }
 
 // (type-specifier | type-qualifier)+ struct-declarator%
-func parseStructDeclaration(p *Parser) error {
+func parseStructDeclaration(p *Parser) (interface{}, error) {
 	return allOf(
 		oneOrMore(
 			anyOf(
@@ -302,7 +308,7 @@ func parseStructDeclaration(p *Parser) error {
 }
 
 // declarator | declarator? ":" constant-expression
-func parseStructDeclarator(p *Parser) error {
+func parseStructDeclarator(p *Parser) (interface{}, error) {
 	return anyOf(
 		parseDeclarator,
 		allOf(
@@ -314,7 +320,7 @@ func parseStructDeclarator(p *Parser) error {
 }
 
 // "enum" (identifier | identifier? "{" enumerator% "}")
-func parseEnumSpecifier(p *Parser) error {
+func parseEnumSpecifier(p *Parser) (interface{}, error) {
 	return allOf(
 		matches(tkEnum),
 		anyOf(
@@ -330,7 +336,7 @@ func parseEnumSpecifier(p *Parser) error {
 }
 
 // identifier ("=" constant-expression)?
-func parseEnumerator(p *Parser) error {
+func parseEnumerator(p *Parser) (interface{}, error) {
 	return allOf(
 		matches(tkIdentifier),
 		optional(
@@ -347,7 +353,7 @@ func parseEnumerator(p *Parser) error {
 //		"(" parameter-type-list ")" |
 //		"(" identifier%? ")"
 // )*
-func parseDeclarator(p *Parser) error {
+func parseDeclarator(p *Parser) (interface{}, error) {
 	return allOf(
 		optional(parsePointer),
 		anyOf(
@@ -381,7 +387,7 @@ func parseDeclarator(p *Parser) error {
 }
 
 // ("*" type-qualifier*)*
-func parsePointer(p *Parser) error {
+func parsePointer(p *Parser) (interface{}, error) {
 	return zeroOrMore(
 		allOf(
 			matches(tkStar),
@@ -391,7 +397,7 @@ func parsePointer(p *Parser) error {
 }
 
 // parameter-declaration% ("," "...")?
-func parseParameterTypeList(p *Parser) error {
+func parseParameterTypeList(p *Parser) (interface{}, error) {
 	return allOf(
 		percent(parseParameterDeclaration),
 		optional(
@@ -404,7 +410,7 @@ func parseParameterTypeList(p *Parser) error {
 }
 
 // declaration-specifiers (declarator | abstract-declarator)?
-func parseParameterDeclaration(p *Parser) error {
+func parseParameterDeclaration(p *Parser) (interface{}, error) {
 	return allOf(
 		parseDeclarationSpecifiers,
 		optional(
@@ -417,7 +423,7 @@ func parseParameterDeclaration(p *Parser) error {
 }
 
 // assignment-expression | "{" initializer% ","? "}"
-func parseInitializer(p *Parser) error {
+func parseInitializer(p *Parser) (interface{}, error) {
 	return anyOf(
 		parseAssignmentExpression,
 		allOf(
@@ -430,7 +436,7 @@ func parseInitializer(p *Parser) error {
 }
 
 // (type-specifier | type-qualifier)+ abstract-declarator?
-func parseTypeName(p *Parser) error {
+func parseTypeName(p *Parser) (interface{}, error) {
 	return allOf(
 		oneOrMore(
 			anyOf(
@@ -446,7 +452,7 @@ func parseTypeName(p *Parser) error {
 //		"[" constant-expression? "]" |
 //		"(" parameter-type-list? ")"
 // )*
-func parseAbstractDeclarator(p *Parser) error {
+func parseAbstractDeclarator(p *Parser) (interface{}, error) {
 	return allOf(
 		parsePointer,
 		optional(
@@ -488,7 +494,7 @@ func parseAbstractDeclarator(p *Parser) error {
 //  "break" ";" |
 //  "return" expression? ";"
 // )
-func parseStatement(p *Parser) error {
+func parseStatement(p *Parser) (interface{}, error) {
 	return allOf(
 		zeroOrMore(
 			allOf(
@@ -582,7 +588,7 @@ func parseStatement(p *Parser) error {
 }
 
 // "{" declaration* statement* "}"
-func parseBlock(p *Parser) error {
+func parseBlock(p *Parser) (interface{}, error) {
 	return allOf(
 		matches(tkLeftCurlyBracket),
 		zeroOrMore(parseDeclaration),
@@ -592,7 +598,7 @@ func parseBlock(p *Parser) error {
 }
 
 // assignment-expression%
-func parseExpression(p *Parser) error {
+func parseExpression(p *Parser) (interface{}, error) {
 	return percent(parseAssignmentExpression)(p)
 }
 
@@ -601,7 +607,7 @@ func parseExpression(p *Parser) error {
 //	 "=" | "*=" | "/=" | "%=" | "+=" | "-=" | "<<=" | ">>=" | "&=" | "^=" | "|="
 //  )
 // )* conditional-expression
-func parseAssignmentExpression(p *Parser) error {
+func parseAssignmentExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		zeroOrMore(
 			allOf(
@@ -626,7 +632,7 @@ func parseAssignmentExpression(p *Parser) error {
 }
 
 // logical-OR-expression ( "?" expression ":" conditional-expression )?
-func parseConditionalExpression(p *Parser) error {
+func parseConditionalExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseLogicalOrExpression,
 		optional(
@@ -641,12 +647,12 @@ func parseConditionalExpression(p *Parser) error {
 }
 
 // conditional-expression
-func parseConstantExpression(p *Parser) error {
+func parseConstantExpression(p *Parser) (interface{}, error) {
 	return parseConditionalExpression(p)
 }
 
 //   logical-AND-expression ( "||" logical-AND-expression )*
-func parseLogicalOrExpression(p *Parser) error {
+func parseLogicalOrExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseLogicalAndExpression,
 		zeroOrMore(
@@ -659,7 +665,7 @@ func parseLogicalOrExpression(p *Parser) error {
 }
 
 //   inclusive-OR-expression ( "&&" inclusive-OR-expression )*
-func parseLogicalAndExpression(p *Parser) error {
+func parseLogicalAndExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseInclusiveOrExpression,
 		zeroOrMore(
@@ -672,7 +678,7 @@ func parseLogicalAndExpression(p *Parser) error {
 }
 
 //   exclusive-OR-expression ( "|" exclusive-OR-expression )*
-func parseInclusiveOrExpression(p *Parser) error {
+func parseInclusiveOrExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseExclusiveOrExpression,
 		zeroOrMore(
@@ -685,7 +691,7 @@ func parseInclusiveOrExpression(p *Parser) error {
 }
 
 //   AND-expression ( "^" AND-expression )*
-func parseExclusiveOrExpression(p *Parser) error {
+func parseExclusiveOrExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseAndExpression,
 		zeroOrMore(
@@ -698,7 +704,7 @@ func parseExclusiveOrExpression(p *Parser) error {
 }
 
 // equality-expression ( "&" equality-expression )*
-func parseAndExpression(p *Parser) error {
+func parseAndExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseEqualityExpression,
 		zeroOrMore(
@@ -711,7 +717,7 @@ func parseAndExpression(p *Parser) error {
 }
 
 // relational-expression ( ("==" | "!=") relational-expression )*
-func parseEqualityExpression(p *Parser) error {
+func parseEqualityExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseRelationalExpression,
 		zeroOrMore(
@@ -727,7 +733,7 @@ func parseEqualityExpression(p *Parser) error {
 }
 
 // shift-expression ( ("<" | ">" | "<=" | ">=") shift-expression )*
-func parseRelationalExpression(p *Parser) error {
+func parseRelationalExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseShiftExpression,
 		zeroOrMore(
@@ -745,7 +751,7 @@ func parseRelationalExpression(p *Parser) error {
 }
 
 // additive-expression ( ("<<" | ">>") additive-expression )*
-func parseShiftExpression(p *Parser) error {
+func parseShiftExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseAdditiveExpression,
 		zeroOrMore(
@@ -761,7 +767,7 @@ func parseShiftExpression(p *Parser) error {
 }
 
 // multiplicative-expression ( ("+" | "-") multiplicative-expression )*
-func parseAdditiveExpression(p *Parser) error {
+func parseAdditiveExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseMultiplicativeExpression,
 		zeroOrMore(
@@ -777,7 +783,7 @@ func parseAdditiveExpression(p *Parser) error {
 }
 
 // cast-expression ( ("*" | "/" | "%" ) cast-expression )*
-func parseMultiplicativeExpression(p *Parser) error {
+func parseMultiplicativeExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		parseCastExpression,
 		zeroOrMore(
@@ -794,7 +800,7 @@ func parseMultiplicativeExpression(p *Parser) error {
 }
 
 // ( "(" type-name ")" )* unary-expression
-func parseCastExpression(p *Parser) error {
+func parseCastExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		zeroOrMore(
 			allOf(
@@ -812,7 +818,7 @@ func parseCastExpression(p *Parser) error {
 //		("&" | "*" | "+" | "-" | "~" | "!" ) cast-expression |
 //		postfix-expression
 // )
-func parseUnaryExpression(p *Parser) error {
+func parseUnaryExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		zeroOrMore(
 			allOf(
@@ -852,7 +858,7 @@ func parseUnaryExpression(p *Parser) error {
 //		"++"                           |
 //		"--"
 // )*
-func parsePostfixExpression(p *Parser) error {
+func parsePostfixExpression(p *Parser) (interface{}, error) {
 	return allOf(
 		anyOf(
 			matches(tkIdentifier),
@@ -892,6 +898,6 @@ func parsePostfixExpression(p *Parser) error {
 }
 
 // integer-constant | character-constant | floating-constant | enumeration-constant
-func parseConstant(p *Parser) error {
+func parseConstant(p *Parser) (interface{}, error) {
 	return matches(tkConstant)(p) // Only one type of constant, for now
 }

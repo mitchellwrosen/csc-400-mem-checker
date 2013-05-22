@@ -1,12 +1,7 @@
 package main
 
 // (function-definition | declaration)+
-type translationUnitNode struct {
-	nodes []struct {
-		fdef *functionDefinitionNode
-		decl *declarationNode
-	}
-}
+type translationUnitNode []interface{}
 
 // declaration-specifiers? declarator declaration* block
 type functionDefinitionNode struct {
