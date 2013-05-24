@@ -3,7 +3,7 @@ module Main where
 import Control.Monad.State.Lazy (state, State)
 import Data.Foldable (forM_)
 import qualified Data.Map as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Debug.Trace (trace)
 import Text.PrettyPrint.HughesPJ ((<+>), cat, Doc, render, text)
 
@@ -114,7 +114,7 @@ functionBodyLeaveScope = state $
 functionBodyDefineVar :: ScopedVariable -> State FuncInfo ()
 functionBodyDefineVar var = state $
    \info -> let (s:ss) = scopes info
-            in ((), setScopes info ((var:s):ss)
+            in ((), setScopes info ((var:s):ss))
 
 {-initUserState :: UserState-}
 {-initUserState =-}
@@ -156,7 +156,7 @@ type MyTrav = Trav UserState ()
 
 -- Statement handlers
 
-handleStmt :: CStatement a -> MyTrav
+handleStmt :: CStatement a -> State FuncInfo ()
 handleStmt (CLabel ident st attrs at)        = handleLabelStmt ident st attrs at
 handleStmt (CCase ex st at)                  = handleCaseStmt ex st at
 handleStmt (CCases ex1 ex2 st at)            = handleCasesStmt ex1 ex2 st at
@@ -174,36 +174,35 @@ handleStmt (CBreak at)                       = handleBreakStmt at
 handleStmt (CReturn ex at)                   = handleReturnStmt ex at
 handleStmt (CAsm st at)                      = handleAsmStmt st at
 
-handleLabelStmt :: Ident -> CStatement a -> [CAttribute a] -> a -> MyTrav
+handleLabelStmt :: Ident -> CStatement a -> [CAttribute a] -> a -> State FuncInfo ()
 handleLabelStmt _ st _ _ = handleStmt st
 
-handleCaseStmt :: CExpression a -> CStatement a -> a -> MyTrav
+handleCaseStmt :: CExpression a -> CStatement a -> a -> State FuncInfo ()
 handleCaseStmt ex st _ = do
    handleExpr ex
    handleStmt st
 
-handleCasesStmt :: CExpression a -> CExpression a -> CStatement a -> a -> MyTrav
+handleCasesStmt :: CExpression a -> CExpression a -> CStatement a -> a -> State FuncInfo ()
 handleCasesStmt ex1 ex2 st _ = do
    handleExpr ex1
    handleExpr ex2
    handleStmt st
 
-handleDefaultStmt :: CStatement a -> a -> MyTrav
+handleDefaultStmt :: CStatement a -> a -> State FuncInfo ()
 handleDefaultStmt st _ = handleStmt st
 
-handleExprStmt :: Maybe (CExpression a) -> a -> MyTrav
+handleExprStmt :: Maybe (CExpression a) -> a -> State FuncInfo ()
 handleExprStmt Nothing _   = return ()
 handleExprStmt (Just ex) _ = handleExpr ex
 
-handleCompoundStmt :: [Ident] -> [CCompoundBlockItem a] -> a -> MyTrav
+handleCompoundStmt :: [Ident] -> [CCompoundBlockItem a] -> a -> State FuncInfo ()
 handleCompoundStmt _ block_items _ = do
-   {-enterBlockScope'-}
+   functionBodyEnterNewScope
    mapM_ handleCompoundBlockItem block_items
-   Trav.leaveBlockScope
+   _ <- functionBodyLeaveScope
+   return ()
 
-{-enterBlockScope' ::-}
-
-handleCompoundBlockItem :: CCompoundBlockItem a -> MyTrav
+handleCompoundBlockItem :: CCompoundBlockItem a -> State FuncInfo ()
 handleCompoundBlockItem (CBlockStmt st)      = handleStmt st
 handleCompoundBlockItem (CBlockDecl decl)    = handleDeclaration decl
 handleCompoundBlockItem (CNestedFunDef fdef) = handleNestedFunDef fdef
@@ -212,54 +211,44 @@ data DeclarationType = ToplevelDecl | StructDecl | ParamDecl | TypenameDecl
 declarationType :: CDeclaration a -> DeclarationType
 declarationType (CDecl _ declrs _) = ToplevelDecl -- TODO: Flush this out
 
-handleDeclaration :: CDeclaration a -> MyTrav
+handleDeclaration :: CDeclaration a -> State FuncInfo ()
 handleDeclaration decl@(CDecl specs init_declr_list node_info) =
    case declarationType decl of
       ToplevelDecl -> do
-         let declrs = getDeclrs init_declr_list
-         let idents = toplevelDeclIdent decl
-         {-let d = Declaration (declrs!!0)-}
-         {-redecl <- withDefTable $ defineScopedIdent (declrs!!0) decl-}
+         let declrs   = getDeclrs init_declr_list
+         let idents   = mapMaybe getIdent declrs
+         let varnames = map identToString idents
+         forM_ varnames functionBodyDefineVar
          return ()
       _ -> return ()
    where getDeclrs = map (\d -> let (Just declr, _, _) = d in declr)
 
--- Gets all identifiers from this top level declaration.
--- i.e. "int a, b, c" -> [a, b, c]
-toplevelDeclIdent :: CDeclaration a -> [Ident]
-toplevelDeclIdent (CDecl _ []     _) = []
-toplevelDeclIdent (CDecl _ init_declr_list _) = foldr extractIdent [] init_declr_list
-   where extractIdent :: (Maybe (CDeclarator a),
-                          Maybe (CInitializer a),
-                          Maybe (CExpression a)) -> [Ident] -> [Ident]
-         extractIdent (Just declr, _, _) acc =
-            case declr of
-               (CDeclr (Just ident) _ _ _ _) -> ident : acc
-               _                     -> acc
+         getIdent :: CDeclarator a -> Maybe Ident
+         getIdent (CDeclr ident _ _ _ _) = ident
 
-handleNestedFunDef :: CFunctionDef a -> MyTrav
-handleNestedFunDef = undefined
+handleNestedFunDef :: CFunctionDef a -> State FuncInfo ()
+handleNestedFunDef = undefined -- TODO
 
 handleIfStmt :: CExpression a -> CStatement a -> Maybe (CStatement a) ->
-                     a -> MyTrav
+                     a -> State FuncInfo ()
 handleIfStmt ex st1 st2 _ = do
    handleExpr ex
    handleStmt st1
    forM_ st2 handleStmt
 
-handleSwitchStmt :: CExpression a -> CStatement a -> a -> MyTrav
+handleSwitchStmt :: CExpression a -> CStatement a -> a -> State FuncInfo ()
 handleSwitchStmt ex st _ = do
    handleExpr ex
    handleStmt st
 
-handleWhileStmt :: CExpression a -> CStatement a -> Bool -> a -> MyTrav
+handleWhileStmt :: CExpression a -> CStatement a -> Bool -> a -> State FuncInfo ()
 handleWhileStmt ex st _ _ = do
    handleExpr ex
    handleStmt st
 
 handleForStmt :: Either (Maybe (CExpression a)) (CDeclaration a) ->
                       Maybe (CExpression a) -> Maybe (CExpression a) ->
-                      CStatement a -> a -> MyTrav
+                      CStatement a -> a -> State FuncInfo ()
 handleForStmt init ex2 ex3 st _ = do
    case init of
       Left Nothing    -> return ()
@@ -269,27 +258,27 @@ handleForStmt init ex2 ex3 st _ = do
    forM_ ex3 handleExpr
    handleStmt st
 
-handleGotoStmt :: Ident -> a -> MyTrav
+handleGotoStmt :: Ident -> a -> State FuncInfo ()
 handleGotoStmt _ _ = return ()
 
-handleGotoPtrStmt :: CExpression a -> a -> MyTrav
+handleGotoPtrStmt :: CExpression a -> a -> State FuncInfo ()
 handleGotoPtrStmt ex _ = handleExpr ex
 
-handleContStmt :: a -> MyTrav
+handleContStmt :: a -> State FuncInfo ()
 handleContStmt _ = return ()
 
-handleBreakStmt :: a -> MyTrav
+handleBreakStmt :: a -> State FuncInfo ()
 handleBreakStmt _ = return ()
 
-handleReturnStmt :: Maybe (CExpression a) -> a -> MyTrav
+handleReturnStmt :: Maybe (CExpression a) -> a -> State FuncInfo ()
 handleReturnStmt ex _ = forM_ ex handleExpr
 
-handleAsmStmt :: CAssemblyStatement a -> a -> MyTrav
+handleAsmStmt :: CAssemblyStatement a -> a -> State FuncInfo ()
 handleAsmStmt = undefined
 
 -- Expression handlers
 
-handleExpr :: CExpression a -> MyTrav
+handleExpr :: CExpression a -> State FuncInfo ()
 handleExpr (CComma exs at)                  = handleCommaExpr exs at
 handleExpr (CAssign op lex rex at)          = handleAssignExpr op lex rex at
 handleExpr (CCond cond tex fex at)          = handleCondExpr cond tex fex at
@@ -312,56 +301,56 @@ handleExpr (CCall func args at)             = handleCallExpr func args at
 {-handleExpr (CLabAddrExpr label at)          = handleLabAddrExpr label at-}
 {-handleExpr (CBuiltinExpr builtin)           = handleBuiltinExpr builtin-}
 
-handleCommaExpr :: [CExpression a] -> a -> MyTrav
+handleCommaExpr :: [CExpression a] -> a -> State FuncInfo ()
 handleCommaExpr exs _ = mapM_ handleExpr exs
 
-handleAssignExpr :: CAssignOp -> CExpression a -> CExpression a -> a -> MyTrav
+handleAssignExpr :: CAssignOp -> CExpression a -> CExpression a -> a -> State FuncInfo ()
 handleAssignExpr _ lex rex _ = do
    handleExpr lex
    handleExpr rex
 
 handleCondExpr :: CExpression a -> Maybe (CExpression a) -> CExpression a ->
-                  a -> MyTrav
+                  a -> State FuncInfo ()
 handleCondExpr cond tex fex _ = do
    handleExpr cond
    forM_ tex handleExpr
    handleExpr fex
 
-handleBinaryExpr :: CBinaryOp -> CExpression a -> CExpression a -> a -> MyTrav
+handleBinaryExpr :: CBinaryOp -> CExpression a -> CExpression a -> a -> State FuncInfo ()
 handleBinaryExpr _ lex rex _ = do
    handleExpr lex
    handleExpr rex
 
-handleCastExpr :: CDeclaration a -> CExpression a -> a -> MyTrav
+handleCastExpr :: CDeclaration a -> CExpression a -> a -> State FuncInfo ()
 handleCastExpr _ ex _ = handleExpr ex
 
-handleUnaryExpr :: CUnaryOp -> CExpression a -> a -> MyTrav
+handleUnaryExpr :: CUnaryOp -> CExpression a -> a -> State FuncInfo ()
 handleUnaryExpr _ ex _ = handleExpr ex
 
-handleSizeofExprExpr :: CExpression a -> a -> MyTrav
+handleSizeofExprExpr :: CExpression a -> a -> State FuncInfo ()
 handleSizeofExprExpr ex _ = handleExpr ex
 
-handleSizeofTypeExpr :: CDeclaration a -> a -> MyTrav
+handleSizeofTypeExpr :: CDeclaration a -> a -> State FuncInfo ()
 handleSizeofTypeExpr _ _ = return ()
 
-handleAlignofExprExpr :: CExpression a -> a -> MyTrav
+handleAlignofExprExpr :: CExpression a -> a -> State FuncInfo ()
 handleAlignofExprExpr ex _ = handleExpr ex
 
-handleAlignofTypeExpr :: CDeclaration a -> a -> MyTrav
+handleAlignofTypeExpr :: CDeclaration a -> a -> State FuncInfo ()
 handleAlignofTypeExpr _ _ = return ()
 
-handleComplexRealExpr :: CExpression a -> a -> MyTrav
+handleComplexRealExpr :: CExpression a -> a -> State FuncInfo ()
 handleComplexRealExpr real _ = handleExpr real
 
-handleComplexImagExpr :: CExpression a -> a -> MyTrav
+handleComplexImagExpr :: CExpression a -> a -> State FuncInfo ()
 handleComplexImagExpr imag _ = handleExpr imag
 
-handleIndexExpr :: CExpression a -> CExpression a -> a -> MyTrav
+handleIndexExpr :: CExpression a -> CExpression a -> a -> State FuncInfo ()
 handleIndexExpr array index _ = do
    handleExpr array
    handleExpr index
 
-handleCallExpr :: CExpression a -> [CExpression a] -> a -> MyTrav
+handleCallExpr :: CExpression a -> [CExpression a] -> a -> State FuncInfo ()
 handleCallExpr = undefined
 {-handleCallExpr func args _ = do-}
    {-case func of-}
