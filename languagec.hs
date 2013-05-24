@@ -1,6 +1,6 @@
 module Main where
 
-import Control.Monad.State.Lazy (state, State)
+import Control.Monad.State.Lazy (execState, state, State)
 import Data.Foldable (forM_)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -72,26 +72,30 @@ funcTrace v s info = render $
    {-text "Node name: " <+> text (show $ nameOfNode info)-}
 
 funcHandler :: DeclEvent -> Trav UserState ()
-funcHandler (DeclEvent (FunctionDef fd@(FunDef v s info))) = do
-   {-modifyUserState (\st -> -}
-   {-freesParameter fd-}
+funcHandler (DeclEvent (FunctionDef (FunDef v s info))) = do
    trace (funcTrace v s info) return ()
-   return ()
-   {-trace (funcTrace v s info) $ do-}
-      {-dt <- getDefTable-}
-      {-dt2 <- foo info v s-}
-      {-modifyUserState (\fds -> (fd, dt, dt2):fds)-}
+
+   let (VarDecl (VarName func_ident _) _ _) = v
+   let func_name = identToString func_ident
+   let func_info = execState (handleStmt s) initState
+   modifyUserState (Map.insert func_name func_info)
 funcHandler _ = return ()
 
 -- User state for Trav, consisting of the current function being traversed over,
 -- as well as a map from function to parameters it has freed
-type UserState = [FuncInfo]
+type UserState = Map.Map String FuncInfo
 
 type ScopedVariable = String
 type Scope = [ScopedVariable]
 data FuncInfo = FuncInfo { scopes      :: [Scope] -- list of scopes, where the tail has the parameters, and each new scope is a new element prepended to the list
                          , freedParams :: [String] -- list of parameters freed within the body of this function
                          }
+
+initState :: FuncInfo
+initState = FuncInfo {
+               scopes      = [],
+               freedParams = []
+            }
 
 -- setScopes info scopes sets info's scopes
 setScopes :: FuncInfo -> [Scope] -> FuncInfo
