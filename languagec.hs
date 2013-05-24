@@ -1,26 +1,13 @@
 module Main where
 
-import System.Environment
-import System.IO
-import Control.Arrow hiding ((<+>))
-{-import Control.Monad-}
+import Control.Monad.State.Lazy (state, State)
 import Data.Foldable (forM_)
-import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.List
-import Data.Maybe
-import Data.Function (fix)
-import Data.Generics
-import Debug.Trace
-import Text.PrettyPrint.HughesPJ
-
+import Data.Maybe (fromMaybe)
+import Debug.Trace (trace)
+import Text.PrettyPrint.HughesPJ ((<+>), cat, Doc, render, text)
 
 import Language.C                 -- Language.C.{Syntax,Pretty,Parser,InputStream}
-{-import Language.C.Analysis        -- the new analysis modules-}
-{-import Language.C.System.GCC-}
-{-import Language.C.Analysis.Export -- [alpha, hence an extra import]-}
-
--- All imports
 import Language.C.Analysis.AstAnalysis
 import Language.C.Analysis.Builtins
 import Language.C.Analysis.ConstEval
@@ -61,10 +48,10 @@ main = do
    ast <- parseTestC
 
    let trav = withExtDeclHandler (analyseAST ast) funcHandler
-   let result = runTrav initUserState trav
+   {-let result = runTrav initUserState trav-}
 
-   (globals, state) <- checkResult "Semantic error" result
-   let tups = userState state
+   {-(globals, state) <- checkResult "Semantic error" result-}
+   {-let tups = userState state-}
 
    return ()
 
@@ -98,47 +85,72 @@ funcHandler _ = return ()
 
 -- User state for Trav, consisting of the current function being traversed over,
 -- as well as a map from function to parameters it has freed
-type FuncMap = Map.Map Ident [Ident]
-data UserState =
-   UserState {
-      curFunc     :: Ident,
-      freedParams :: FuncMap
-   }
+type UserState = [FuncInfo]
 
-initUserState :: UserState
-initUserState =
-   UserState {
-      curFunc     = undefined,
-      freedParams = Map.empty
-   }
+type ScopedVariable = String
+type Scope = [ScopedVariable]
+data FuncInfo = FuncInfo { scopes      :: [Scope] -- list of scopes, where the tail has the parameters, and each new scope is a new element prepended to the list
+                         , freedParams :: [String] -- list of parameters freed within the body of this function
+                         }
 
--- setCurFuncName funcName oldState updates oldState's curFuncName with funcName
-setCurFuncName :: Ident -> UserState -> UserState
-setCurFuncName newFunc oldState =
-   UserState {
-      curFunc     = newFunc,
-      freedParams = freedParams oldState
-   }
+-- setScopes info scopes sets info's scopes
+setScopes :: FuncInfo -> [Scope] -> FuncInfo
+setScopes info ss = info { scopes = ss }
 
-setFreedParams :: FuncMap -> UserState -> UserState
-setFreedParams newFreedParams oldState =
-   UserState {
-      curFunc     = curFunc oldState,
-      freedParams = newFreedParams
-   }
+-- modifyScopes info f applies f to info's scopes and returns the new info
+modifyScopes :: FuncInfo -> ([Scope] -> [Scope]) -> FuncInfo
+modifyScopes info f = setScopes info (f $ scopes info)
 
--- putFreedParam paramName oldState adds a freed parameter to the current
--- function's list of freed parameters.
---
--- Requires: current function name to exist in the map
-putFreedParam :: Ident -> UserState -> UserState
-putFreedParam paramName oldState =
-   let
-      fn      = curFunc oldState
-      oldMap  = freedParams oldState
-      newMap  = Map.adjust (paramName:) fn oldMap
-   in
-      setFreedParams newMap oldState
+functionBodyEnterNewScope :: State FuncInfo ()
+functionBodyEnterNewScope = state $ \info -> ((), modifyScopes info ([]:))
+
+-- Leaves the current scope, returning it
+functionBodyLeaveScope :: State FuncInfo Scope
+functionBodyLeaveScope = state $
+   \info -> let (s:_) = scopes info
+            in (s, modifyScopes info tail)
+
+-- Define a variable in the current scope of info
+functionBodyDefineVar :: ScopedVariable -> State FuncInfo ()
+functionBodyDefineVar var = state $
+   \info -> let (s:ss) = scopes info
+            in ((), setScopes info ((var:s):ss)
+
+{-initUserState :: UserState-}
+{-initUserState =-}
+   {-UserState { -}
+      {-curFunc     = undefined,-}
+      {-freedParams = Map.empty-}
+   {-}-}
+
+{--- setCurFuncName funcName oldState updates oldState's curFuncName with funcName-}
+{-setCurFuncName :: Ident -> UserState -> UserState-}
+{-setCurFuncName newFunc oldState =-}
+   {-UserState { -}
+      {-curFunc     = newFunc,-}
+      {-freedParams = freedParams oldState-}
+   {-}-}
+
+{-setFreedParams :: FuncMap -> UserState -> UserState-}
+{-setFreedParams newFreedParams oldState =-}
+   {-UserState { -}
+      {-curFunc     = curFunc oldState,-}
+      {-freedParams = newFreedParams-}
+
+   {-}-}
+
+{--- putFreedParam paramName oldState adds a freed parameter to the current-}
+{--- function's list of freed parameters.-}
+{----}
+{--- Requires: current function name to exist in the map-}
+{-putFreedParam :: Ident -> UserState -> UserState-}
+{-putFreedParam paramName oldState =-}
+   {-let-}
+      {-fn      = curFunc oldState-}
+      {-oldMap  = freedParams oldState-}
+      {-newMap  = Map.adjust (paramName:) fn oldMap-}
+   {-in-}
+      {-setFreedParams newMap oldState-}
 
 type MyTrav = Trav UserState ()
 
@@ -162,8 +174,7 @@ handleStmt (CBreak at)                       = handleBreakStmt at
 handleStmt (CReturn ex at)                   = handleReturnStmt ex at
 handleStmt (CAsm st at)                      = handleAsmStmt st at
 
-handleLabelStmt :: Ident -> CStatement a -> [CAttribute a] -> a ->
-                        MyTrav
+handleLabelStmt :: Ident -> CStatement a -> [CAttribute a] -> a -> MyTrav
 handleLabelStmt _ st _ _ = handleStmt st
 
 handleCaseStmt :: CExpression a -> CStatement a -> a -> MyTrav
@@ -171,8 +182,7 @@ handleCaseStmt ex st _ = do
    handleExpr ex
    handleStmt st
 
-handleCasesStmt :: CExpression a -> CExpression a -> CStatement a -> a ->
-                        MyTrav
+handleCasesStmt :: CExpression a -> CExpression a -> CStatement a -> a -> MyTrav
 handleCasesStmt ex1 ex2 st _ = do
    handleExpr ex1
    handleExpr ex2
@@ -187,19 +197,45 @@ handleExprStmt (Just ex) _ = handleExpr ex
 
 handleCompoundStmt :: [Ident] -> [CCompoundBlockItem a] -> a -> MyTrav
 handleCompoundStmt _ block_items _ = do
-   Trav.enterBlockScope
+   {-enterBlockScope'-}
    mapM_ handleCompoundBlockItem block_items
    Trav.leaveBlockScope
+
+{-enterBlockScope' ::-}
 
 handleCompoundBlockItem :: CCompoundBlockItem a -> MyTrav
 handleCompoundBlockItem (CBlockStmt st)      = handleStmt st
 handleCompoundBlockItem (CBlockDecl decl)    = handleDeclaration decl
 handleCompoundBlockItem (CNestedFunDef fdef) = handleNestedFunDef fdef
 
+data DeclarationType = ToplevelDecl | StructDecl | ParamDecl | TypenameDecl
+declarationType :: CDeclaration a -> DeclarationType
+declarationType (CDecl _ declrs _) = ToplevelDecl -- TODO: Flush this out
+
 handleDeclaration :: CDeclaration a -> MyTrav
-handleDeclaration decl = do
-   redecl <- withDefTable $ defineScopedIdent (declIdent decl) decl
-   return ()
+handleDeclaration decl@(CDecl specs init_declr_list node_info) =
+   case declarationType decl of
+      ToplevelDecl -> do
+         let declrs = getDeclrs init_declr_list
+         let idents = toplevelDeclIdent decl
+         {-let d = Declaration (declrs!!0)-}
+         {-redecl <- withDefTable $ defineScopedIdent (declrs!!0) decl-}
+         return ()
+      _ -> return ()
+   where getDeclrs = map (\d -> let (Just declr, _, _) = d in declr)
+
+-- Gets all identifiers from this top level declaration.
+-- i.e. "int a, b, c" -> [a, b, c]
+toplevelDeclIdent :: CDeclaration a -> [Ident]
+toplevelDeclIdent (CDecl _ []     _) = []
+toplevelDeclIdent (CDecl _ init_declr_list _) = foldr extractIdent [] init_declr_list
+   where extractIdent :: (Maybe (CDeclarator a),
+                          Maybe (CInitializer a),
+                          Maybe (CExpression a)) -> [Ident] -> [Ident]
+         extractIdent (Just declr, _, _) acc =
+            case declr of
+               (CDeclr (Just ident) _ _ _ _) -> ident : acc
+               _                     -> acc
 
 handleNestedFunDef :: CFunctionDef a -> MyTrav
 handleNestedFunDef = undefined
