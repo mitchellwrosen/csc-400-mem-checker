@@ -293,13 +293,13 @@ handleExpr (CComplexReal real at)           = handleComplexRealExpr real at
 handleExpr (CComplexImag imag at)           = handleComplexImagExpr imag at
 handleExpr (CIndex array index at)          = handleIndexExpr array index at
 handleExpr (CCall func args at)             = handleCallExpr func args at
-{-handleExpr (CMember struct member deref at) = handleMemberExpr struct member deref at-}
-{-handleExpr (CVar ident at)                  = handleVarExpr ident at-}
-{-handleExpr (CConst const at)                = handleConstExpr const at-}
-{-handleExpr (CCompoundLit typename inits at) = handleCompoundLitExpr typename inits at-}
-{-handleExpr (CStatExpr st at)                = handleStmtExpr st at-}
-{-handleExpr (CLabAddrExpr label at)          = handleLabAddrExpr label at-}
-{-handleExpr (CBuiltinExpr builtin)           = handleBuiltinExpr builtin-}
+handleExpr (CMember struct member deref at) = handleMemberExpr struct member deref at
+handleExpr (CVar ident at)                  = handleVarExpr ident at
+handleExpr (CConst const)                   = handleConstExpr const
+handleExpr (CCompoundLit typename inits at) = handleCompoundLitExpr typename inits at
+handleExpr (CStatExpr st at)                = handleStmtExpr st at
+handleExpr (CLabAddrExpr label at)          = handleLabAddrExpr label at
+handleExpr (CBuiltinExpr builtin)           = handleBuiltinExpr builtin
 
 handleCommaExpr :: [CExpression a] -> a -> State FuncInfo ()
 handleCommaExpr exs _ = mapM_ handleExpr exs
@@ -351,21 +351,34 @@ handleIndexExpr array index _ = do
    handleExpr index
 
 handleCallExpr :: CExpression a -> [CExpression a] -> a -> State FuncInfo ()
-handleCallExpr = undefined
+handleCallExpr = undefined -- TODO
 {-handleCallExpr func args _ = do-}
    {-case func of-}
       {-CVar (name, n, info) ->-}
          {-if name == "free"-}
          {-then modifyUserState (\m -> if notMember-}
 
+handleMemberExpr :: CExpression a -> Ident -> Bool -> a -> State FuncInfo ()
+handleMemberExpr struct member deref at = handleExpr struct
 
+handleVarExpr :: Ident -> a -> State FuncInfo ()
+handleVarExpr ident at = return ()
 
+handleConstExpr :: CConstant a -> State FuncInfo ()
+handleConstExpr const = return ()
 
+handleCompoundLitExpr :: CDeclaration a -> CInitializerList a -> a ->
+                         State FuncInfo ()
+handleCompoundLitExpr typename inits at = handleDeclaration typename -- TODO: correct?
 
+handleStmtExpr :: CStatement a -> a -> State FuncInfo ()
+handleStmtExpr st at = handleStmt st
 
+handleLabAddrExpr :: Ident -> a -> State FuncInfo ()
+handleLabAddrExpr label at = return ()
 
-
-
+handleBuiltinExpr :: CBuiltinThing a -> State FuncInfo ()
+handleBuiltinExpr = undefined -- TODO
 
 freesParameter :: MonadTrav m => FunDef -> m [Int]
 freesParameter fd@(FunDef var_decl stat@(CCompound localLabels blockItems _) node_info) = do
@@ -380,8 +393,6 @@ freesParameter fd@(FunDef var_decl stat@(CCompound localLabels blockItems _) nod
          (return ())
 
    {-freed <- mapM getFreed_cbi blockItems-}
-
-
 
    {-dt <- getDefTable-}
    Trav.leaveFunctionScope
