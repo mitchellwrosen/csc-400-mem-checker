@@ -1,5 +1,7 @@
 module Main where
 
+import FunctionBodyTravMonad
+
 import Control.Monad.State.Lazy (execState, state, State)
 import Data.Foldable (forM_)
 import qualified Data.Map as Map
@@ -48,21 +50,12 @@ main = do
    ast <- parseTestC
 
    let trav = withExtDeclHandler (analyseAST ast) funcHandler
-   {-let result = runTrav initUserState trav-}
+   let result = runTrav initFuncInfoMap trav
 
-   {-(globals, state) <- checkResult "Semantic error" result-}
-   {-let tups = userState state-}
+   (globals, state) <- checkResult "Semantic error" result
+   let tups = userState state
 
    return ()
-
-foo :: (MonadTrav m) => NodeInfo -> VarDecl -> CStat -> m DefTable
-foo node_info decl s@(CCompound localLabels _ _) = do
-   Trav.enterFunctionScope
-   mapM_ (withDefTable . defineLabel) (localLabels ++ getLabels s)
-   defineParams node_info decl -- record parameters
-   dt <- getDefTable
-   Trav.leaveFunctionScope
-   return dt
 
 funcTrace :: VarDecl -> Stmt -> NodeInfo -> String
 funcTrace v s info = render $
@@ -71,31 +64,59 @@ funcTrace v s info = render $
    text "Position: " <+> text (show $ posOfNode info) <+> text "\n"
    {-text "Node name: " <+> text (show $ nameOfNode info)-}
 
-funcHandler :: DeclEvent -> Trav UserState ()
+funcHandler :: DeclEvent -> Trav FuncInfoMap ()
 funcHandler (DeclEvent (FunctionDef (FunDef v s info))) = do
    trace (funcTrace v s info) return ()
 
-   let (VarDecl (VarName func_ident _) _ _) = v
+{-params (FunDef (VarDecl _ _ (FunctionType (FunType _ ps _) _)) _ _) = ps-}
+   let (VarDecl (VarName func_ident _) _ (FunctionType (FunType _ ps _) _)) = v
    let func_name = identToString func_ident
-   let func_info = execState (handleStmt s) initState
+   let param_decls = ps -- TODO: get idents
+
+   {-let func_info = unFBTrav $-}
+   let func_info = execState (handleStmt s) initFuncInfo
+
+   trace func_name (return ())
+   trace (show func_info) (return ())
+
    modifyUserState (Map.insert func_name func_info)
 funcHandler _ = return ()
 
 -- User state for Trav, consisting of the current function being traversed over,
 -- as well as a map from function to parameters it has freed
-type UserState = Map.Map String FuncInfo
+type FuncInfoMap = Map.Map String FuncInfo
+initFuncInfoMap :: FuncInfoMap
+initFuncInfoMap = Map.empty
+
+type MyTrav = Trav FuncInfoMap ()
+
+--------------------------------------------------------------------------------
+
+newtype FunctionBodyTrav s a = FunctionBodyTrav { unTrav :: State s a }
+
+instance Monad (FunctionBodyTrav s) where
+   return x = FunctionBodyTrav $ return x
+   (FunctionBodyTrav h) >>= f = FunctionBodyTrav $ h >>= (unTrav . f)
+
+instance MonadFunctionBodyTrav (FunctionBodyTrav s) where
+   handleStmt          = doHandleStmt
 
 type ScopedVariable = String
 type Scope = [ScopedVariable]
-data FuncInfo = FuncInfo { scopes      :: [Scope] -- list of scopes, where the tail has the parameters, and each new scope is a new element prepended to the list
-                         , freedParams :: [String] -- list of parameters freed within the body of this function
-                         }
 
-initState :: FuncInfo
-initState = FuncInfo {
-               scopes      = [],
-               freedParams = []
-            }
+-- User state for FunctionBodyTrav
+data FuncInfo = FuncInfo {
+   scopes      :: [Scope], -- list of scopes, where the tail has the parameters, and each new scope is a new element prepended to the list
+   freedParams :: [String] -- list of parameters freed within the body of this function
+} deriving (Show)
+
+-- Initial function info, given the parameters
+{-initFuncInfo :: VarDecl -> FuncInfo -- TODO-}
+initFuncInfo :: FuncInfo
+initFuncInfo = FuncInfo {
+   scopes      = [],
+   freedParams = []
+}
 
 -- setScopes info scopes sets info's scopes
 setScopes :: FuncInfo -> [Scope] -> FuncInfo
@@ -105,118 +126,85 @@ setScopes info ss = info { scopes = ss }
 modifyScopes :: FuncInfo -> ([Scope] -> [Scope]) -> FuncInfo
 modifyScopes info f = setScopes info (f $ scopes info)
 
-functionBodyEnterNewScope :: State FuncInfo ()
-functionBodyEnterNewScope = state $ \info -> ((), modifyScopes info ([]:))
-
--- Leaves the current scope, returning it
-functionBodyLeaveScope :: State FuncInfo Scope
-functionBodyLeaveScope = state $
-   \info -> let (s:_) = scopes info
-            in (s, modifyScopes info tail)
-
 -- Define a variable in the current scope of info
-functionBodyDefineVar :: ScopedVariable -> State FuncInfo ()
-functionBodyDefineVar var = state $
+functionBodyDefineVar :: MonadFunctionBodyTrav m => ScopedVariable -> m ()
+functionBodyDefineVar var =
+   trace ("Defining " ++ var) $
+   state $
    \info -> let (s:ss) = scopes info
             in ((), setScopes info ((var:s):ss))
 
-{-initUserState :: UserState-}
-{-initUserState =-}
-   {-UserState { -}
-      {-curFunc     = undefined,-}
-      {-freedParams = Map.empty-}
-   {-}-}
+bodyEnterBlockScope :: MonadFunctionBodyTrav m => m ()
+bodyEnterBlockScope = state $ \info -> ((), modifyScopes info ([]:))
 
-{--- setCurFuncName funcName oldState updates oldState's curFuncName with funcName-}
-{-setCurFuncName :: Ident -> UserState -> UserState-}
-{-setCurFuncName newFunc oldState =-}
-   {-UserState { -}
-      {-curFunc     = newFunc,-}
-      {-freedParams = freedParams oldState-}
-   {-}-}
+-- Leaves the current scope, returning it
+bodyLeaveBlockScope :: MonadFunctionBodyTrav m => m Scope
+bodyLeaveBlockScope = state $
+   \info -> let (s:_) = scopes info
+            in (s, modifyScopes info tail)
 
-{-setFreedParams :: FuncMap -> UserState -> UserState-}
-{-setFreedParams newFreedParams oldState =-}
-   {-UserState { -}
-      {-curFunc     = curFunc oldState,-}
-      {-freedParams = newFreedParams-}
 
-   {-}-}
-
-{--- putFreedParam paramName oldState adds a freed parameter to the current-}
-{--- function's list of freed parameters.-}
-{----}
-{--- Requires: current function name to exist in the map-}
-{-putFreedParam :: Ident -> UserState -> UserState-}
-{-putFreedParam paramName oldState =-}
-   {-let-}
-      {-fn      = curFunc oldState-}
-      {-oldMap  = freedParams oldState-}
-      {-newMap  = Map.adjust (paramName:) fn oldMap-}
-   {-in-}
-      {-setFreedParams newMap oldState-}
-
-type MyTrav = Trav UserState ()
 
 -- Statement handlers
 
-handleStmt :: CStatement a -> State FuncInfo ()
-handleStmt (CLabel ident st attrs at)        = handleLabelStmt ident st attrs at
-handleStmt (CCase ex st at)                  = handleCaseStmt ex st at
-handleStmt (CCases ex1 ex2 st at)            = handleCasesStmt ex1 ex2 st at
-handleStmt (CDefault st at)                  = handleDefaultStmt st at
-handleStmt (CExpr ex at)                     = handleExprStmt ex at
-handleStmt (CCompound idents block_items at) = handleCompoundStmt idents block_items at
-handleStmt (CIf ex st1 st2 at)               = handleIfStmt ex st1 st2 at
-handleStmt (CSwitch ex st at)                = handleSwitchStmt ex st at
-handleStmt (CWhile ex st isDoWhile at)       = handleWhileStmt ex st isDoWhile at
-handleStmt (CFor init ex2 ex3 st at)         = handleForStmt init ex2 ex3 st at
-handleStmt (CGoto ident at)                  = handleGotoStmt ident at
-handleStmt (CGotoPtr ex at)                  = handleGotoPtrStmt ex at
-handleStmt (CCont at)                        = handleContStmt at
-handleStmt (CBreak at)                       = handleBreakStmt at
-handleStmt (CReturn ex at)                   = handleReturnStmt ex at
-handleStmt (CAsm st at)                      = handleAsmStmt st at
+doHandleStmt :: MonadFunctionBodyTrav m => CStatement a -> m ()
+doHandleStmt (CLabel ident st attrs at)        = doHandleLabelStmt ident st attrs at
+doHandleStmt (CCase ex st at)                  = doHandleCaseStmt ex st at
+doHandleStmt (CCases ex1 ex2 st at)            = doHandleCasesStmt ex1 ex2 st at
+doHandleStmt (CDefault st at)                  = doHandleDefaultStmt st at
+doHandleStmt (CExpr ex at)                     = doHandleExprStmt ex at
+doHandleStmt (CCompound idents block_items at) = doHandleCompoundStmt idents block_items at
+doHandleStmt (CIf ex st1 st2 at)               = doHandleIfStmt ex st1 st2 at
+doHandleStmt (CSwitch ex st at)                = doHandleSwitchStmt ex st at
+doHandleStmt (CWhile ex st isDoWhile at)       = doHandleWhileStmt ex st isDoWhile at
+doHandleStmt (CFor init ex2 ex3 st at)         = doHandleForStmt init ex2 ex3 st at
+doHandleStmt (CGoto ident at)                  = doHandleGotoStmt ident at
+doHandleStmt (CGotoPtr ex at)                  = doHandleGotoPtrStmt ex at
+doHandleStmt (CCont at)                        = doHandleContStmt at
+doHandleStmt (CBreak at)                       = doHandleBreakStmt at
+doHandleStmt (CReturn ex at)                   = doHandleReturnStmt ex at
+doHandleStmt (CAsm st at)                      = doHandleAsmStmt st at
 
-handleLabelStmt :: Ident -> CStatement a -> [CAttribute a] -> a -> State FuncInfo ()
-handleLabelStmt _ st _ _ = handleStmt st
+doHandleLabelStmt :: MonadFunctionBodyTrav m => Ident -> CStatement a -> [CAttribute a] -> a -> m ()
+doHandleLabelStmt _ st _ _ = doHandleStmt st
 
-handleCaseStmt :: CExpression a -> CStatement a -> a -> State FuncInfo ()
-handleCaseStmt ex st _ = do
-   handleExpr ex
-   handleStmt st
+doHandleCaseStmt :: MonadFunctionBodyTrav m => CExpression a -> CStatement a -> a -> m ()
+doHandleCaseStmt ex st _ = do
+   doHandleExpr ex
+   doHandleStmt st
 
-handleCasesStmt :: CExpression a -> CExpression a -> CStatement a -> a -> State FuncInfo ()
-handleCasesStmt ex1 ex2 st _ = do
-   handleExpr ex1
-   handleExpr ex2
-   handleStmt st
+doHandleCasesStmt :: MonadFunctionBodyTrav m => CExpression a ->
+                     CExpression a -> CStatement a -> a -> m ()
+doHandleCasesStmt ex1 ex2 st _ = do
+   doHandleExpr ex1
+   doHandleExpr ex2
+   doHandleStmt st
 
-handleDefaultStmt :: CStatement a -> a -> State FuncInfo ()
-handleDefaultStmt st _ = handleStmt st
+doHandleDefaultStmt :: MonadFunctionBodyTrav m => CStatement a -> a -> m ()
+doHandleDefaultStmt st _ = doHandleStmt st
 
-handleExprStmt :: Maybe (CExpression a) -> a -> State FuncInfo ()
-handleExprStmt Nothing _   = return ()
-handleExprStmt (Just ex) _ = handleExpr ex
+doHandleExprStmt :: MonadFunctionBodyTrav m => Maybe (CExpression a) -> a -> m ()
+doHandleExprStmt Nothing _   = return ()
+doHandleExprStmt (Just ex) _ = doHandleExpr ex
 
-handleCompoundStmt :: [Ident] -> [CCompoundBlockItem a] -> a -> State FuncInfo ()
-handleCompoundStmt _ block_items _ = do
-   functionBodyEnterNewScope
-   mapM_ handleCompoundBlockItem block_items
-   _ <- functionBodyLeaveScope
+doHandleCompoundStmt :: MonadFunctionBodyTrav m => [Ident] -> [CCompoundBlockItem a] -> a -> m ()
+doHandleCompoundStmt _ block_items _ = do
+   bodyEnterBlockScope
+   mapM_ doHandleCompoundBlockItem block_items
+   _ <- bodyLeaveBlockScope
    return ()
 
-handleCompoundBlockItem :: CCompoundBlockItem a -> State FuncInfo ()
-handleCompoundBlockItem (CBlockStmt st)      = handleStmt st
-handleCompoundBlockItem (CBlockDecl decl)    = handleDeclaration decl
-handleCompoundBlockItem (CNestedFunDef fdef) = handleNestedFunDef fdef
+doHandleCompoundBlockItem :: MonadFunctionBodyTrav m => CCompoundBlockItem a -> m ()
+doHandleCompoundBlockItem (CBlockStmt st)      = doHandleStmt st
+doHandleCompoundBlockItem (CBlockDecl decl)    = doHandleDeclaration decl
+doHandleCompoundBlockItem (CNestedFunDef fdef) = doHandleNestedFunDef fdef
 
 data DeclarationType = ToplevelDecl | StructDecl | ParamDecl | TypenameDecl
 declarationType :: CDeclaration a -> DeclarationType
 declarationType (CDecl _ declrs _) = ToplevelDecl -- TODO: Flush this out
 
-handleDeclaration :: CDeclaration a -> State FuncInfo ()
-handleDeclaration decl@(CDecl specs init_declr_list node_info) =
+doHandleDeclaration :: MonadFunctionBodyTrav m => CDeclaration a -> m ()
+doHandleDeclaration decl@(CDecl specs init_declr_list node_info) =
    case declarationType decl of
       ToplevelDecl -> do
          let declrs   = getDeclrs init_declr_list
@@ -230,159 +218,157 @@ handleDeclaration decl@(CDecl specs init_declr_list node_info) =
          getIdent :: CDeclarator a -> Maybe Ident
          getIdent (CDeclr ident _ _ _ _) = ident
 
-handleNestedFunDef :: CFunctionDef a -> State FuncInfo ()
-handleNestedFunDef = undefined -- TODO
+doHandleNestedFunDef :: MonadFunctionBodyTrav m => CFunctionDef a -> m ()
+doHandleNestedFunDef = undefined -- TODO
 
-handleIfStmt :: CExpression a -> CStatement a -> Maybe (CStatement a) ->
-                     a -> State FuncInfo ()
-handleIfStmt ex st1 st2 _ = do
-   handleExpr ex
-   handleStmt st1
-   forM_ st2 handleStmt
+doHandleIfStmt :: MonadFunctionBodyTrav m => CExpression a -> CStatement a -> Maybe (CStatement a) -> a -> m ()
+doHandleIfStmt ex st1 st2 _ = do
+   doHandleExpr ex
+   doHandleStmt st1
+   forM_ st2 doHandleStmt
 
-handleSwitchStmt :: CExpression a -> CStatement a -> a -> State FuncInfo ()
-handleSwitchStmt ex st _ = do
-   handleExpr ex
-   handleStmt st
+doHandleSwitchStmt :: MonadFunctionBodyTrav m => CExpression a -> CStatement a -> a -> m ()
+doHandleSwitchStmt ex st _ = do
+   doHandleExpr ex
+   doHandleStmt st
 
-handleWhileStmt :: CExpression a -> CStatement a -> Bool -> a -> State FuncInfo ()
-handleWhileStmt ex st _ _ = do
-   handleExpr ex
-   handleStmt st
+doHandleWhileStmt :: MonadFunctionBodyTrav m => CExpression a -> CStatement a -> Bool -> a -> m ()
+doHandleWhileStmt ex st _ _ = do
+   doHandleExpr ex
+   doHandleStmt st
 
-handleForStmt :: Either (Maybe (CExpression a)) (CDeclaration a) ->
-                      Maybe (CExpression a) -> Maybe (CExpression a) ->
-                      CStatement a -> a -> State FuncInfo ()
-handleForStmt init ex2 ex3 st _ = do
+doHandleForStmt :: MonadFunctionBodyTrav m =>
+                   Either (Maybe (CExpression a)) (CDeclaration a) ->
+                   Maybe (CExpression a) -> Maybe (CExpression a) ->
+                   CStatement a -> a -> m ()
+doHandleForStmt init ex2 ex3 st _ = do
    case init of
       Left Nothing    -> return ()
-      Left (Just ex1) -> handleExpr ex1
-      Right decl      -> handleDeclaration decl
-   forM_ ex2 handleExpr
-   forM_ ex3 handleExpr
-   handleStmt st
+      Left (Just ex1) -> doHandleExpr ex1
+      Right decl      -> doHandleDeclaration decl
+   forM_ ex2 doHandleExpr
+   forM_ ex3 doHandleExpr
+   doHandleStmt st
 
-handleGotoStmt :: Ident -> a -> State FuncInfo ()
-handleGotoStmt _ _ = return ()
+doHandleGotoStmt :: MonadFunctionBodyTrav m => Ident -> a -> m ()
+doHandleGotoStmt _ _ = return ()
 
-handleGotoPtrStmt :: CExpression a -> a -> State FuncInfo ()
-handleGotoPtrStmt ex _ = handleExpr ex
+doHandleGotoPtrStmt :: MonadFunctionBodyTrav m => CExpression a -> a -> m ()
+doHandleGotoPtrStmt ex _ = doHandleExpr ex
 
-handleContStmt :: a -> State FuncInfo ()
-handleContStmt _ = return ()
+doHandleContStmt :: MonadFunctionBodyTrav m => a -> m ()
+doHandleContStmt _ = return ()
 
-handleBreakStmt :: a -> State FuncInfo ()
-handleBreakStmt _ = return ()
+doHandleBreakStmt :: MonadFunctionBodyTrav m => a -> m ()
+doHandleBreakStmt _ = return ()
 
-handleReturnStmt :: Maybe (CExpression a) -> a -> State FuncInfo ()
-handleReturnStmt ex _ = forM_ ex handleExpr
+doHandleReturnStmt :: MonadFunctionBodyTrav m => Maybe (CExpression a) -> a -> m ()
+doHandleReturnStmt ex _ = forM_ ex doHandleExpr
 
-handleAsmStmt :: CAssemblyStatement a -> a -> State FuncInfo ()
-handleAsmStmt = undefined
+doHandleAsmStmt :: MonadFunctionBodyTrav m => CAssemblyStatement a -> a -> m ()
+doHandleAsmStmt = undefined
 
--- Expression handlers
+-- Expression doHandlers
 
-handleExpr :: CExpression a -> State FuncInfo ()
-handleExpr (CComma exs at)                  = handleCommaExpr exs at
-handleExpr (CAssign op lex rex at)          = handleAssignExpr op lex rex at
-handleExpr (CCond cond tex fex at)          = handleCondExpr cond tex fex at
-handleExpr (CBinary op lex rex at)          = handleBinaryExpr op lex rex at
-handleExpr (CCast typename ex at)           = handleCastExpr typename ex at
-handleExpr (CUnary op ex at)                = handleUnaryExpr op ex at
-handleExpr (CSizeofExpr ex at)              = handleSizeofExprExpr ex at
-handleExpr (CSizeofType typename at)        = handleSizeofTypeExpr typename at
-handleExpr (CAlignofExpr ex at)             = handleAlignofExprExpr ex at
-handleExpr (CAlignofType typename at)       = handleAlignofTypeExpr typename at
-handleExpr (CComplexReal real at)           = handleComplexRealExpr real at
-handleExpr (CComplexImag imag at)           = handleComplexImagExpr imag at
-handleExpr (CIndex array index at)          = handleIndexExpr array index at
-handleExpr (CCall func args at)             = handleCallExpr func args at
-handleExpr (CMember struct member deref at) = handleMemberExpr struct member deref at
-handleExpr (CVar ident at)                  = handleVarExpr ident at
-handleExpr (CConst const)                   = handleConstExpr const
-handleExpr (CCompoundLit typename inits at) = handleCompoundLitExpr typename inits at
-handleExpr (CStatExpr st at)                = handleStmtExpr st at
-handleExpr (CLabAddrExpr label at)          = handleLabAddrExpr label at
-handleExpr (CBuiltinExpr builtin)           = handleBuiltinExpr builtin
+doHandleExpr :: MonadFunctionBodyTrav m => CExpression a -> m ()
+doHandleExpr (CComma exs at)                  = doHandleCommaExpr exs at
+doHandleExpr (CAssign op lex rex at)          = doHandleAssignExpr op lex rex at
+doHandleExpr (CCond cond tex fex at)          = doHandleCondExpr cond tex fex at
+doHandleExpr (CBinary op lex rex at)          = doHandleBinaryExpr op lex rex at
+doHandleExpr (CCast typename ex at)           = doHandleCastExpr typename ex at
+doHandleExpr (CUnary op ex at)                = doHandleUnaryExpr op ex at
+doHandleExpr (CSizeofExpr ex at)              = doHandleSizeofExprExpr ex at
+doHandleExpr (CSizeofType typename at)        = doHandleSizeofTypeExpr typename at
+doHandleExpr (CAlignofExpr ex at)             = doHandleAlignofExprExpr ex at
+doHandleExpr (CAlignofType typename at)       = doHandleAlignofTypeExpr typename at
+doHandleExpr (CComplexReal real at)           = doHandleComplexRealExpr real at
+doHandleExpr (CComplexImag imag at)           = doHandleComplexImagExpr imag at
+doHandleExpr (CIndex array index at)          = doHandleIndexExpr array index at
+doHandleExpr (CCall func args at)             = doHandleCallExpr func args at
+doHandleExpr (CMember struct member deref at) = doHandleMemberExpr struct member deref at
+doHandleExpr (CVar ident at)                  = doHandleVarExpr ident at
+doHandleExpr (CConst const)                   = doHandleConstExpr const
+doHandleExpr (CCompoundLit typename inits at) = doHandleCompoundLitExpr typename inits at
+doHandleExpr (CStatExpr st at)                = doHandleStmtExpr st at
+doHandleExpr (CLabAddrExpr label at)          = doHandleLabAddrExpr label at
+doHandleExpr (CBuiltinExpr builtin)           = doHandleBuiltinExpr builtin
 
-handleCommaExpr :: [CExpression a] -> a -> State FuncInfo ()
-handleCommaExpr exs _ = mapM_ handleExpr exs
+doHandleCommaExpr :: MonadFunctionBodyTrav m => [CExpression a] -> a -> m ()
+doHandleCommaExpr exs _ = mapM_ doHandleExpr exs
 
-handleAssignExpr :: CAssignOp -> CExpression a -> CExpression a -> a -> State FuncInfo ()
-handleAssignExpr _ lex rex _ = do
-   handleExpr lex
-   handleExpr rex
+doHandleAssignExpr :: MonadFunctionBodyTrav m => CAssignOp -> CExpression a -> CExpression a -> a -> m ()
+doHandleAssignExpr _ lex rex _ = do
+   doHandleExpr lex
+   doHandleExpr rex
 
-handleCondExpr :: CExpression a -> Maybe (CExpression a) -> CExpression a ->
-                  a -> State FuncInfo ()
-handleCondExpr cond tex fex _ = do
-   handleExpr cond
-   forM_ tex handleExpr
-   handleExpr fex
+doHandleCondExpr :: MonadFunctionBodyTrav m => CExpression a -> Maybe (CExpression a) -> CExpression a -> a -> m ()
+doHandleCondExpr cond tex fex _ = do
+   doHandleExpr cond
+   forM_ tex doHandleExpr
+   doHandleExpr fex
 
-handleBinaryExpr :: CBinaryOp -> CExpression a -> CExpression a -> a -> State FuncInfo ()
-handleBinaryExpr _ lex rex _ = do
-   handleExpr lex
-   handleExpr rex
+doHandleBinaryExpr :: MonadFunctionBodyTrav m => CBinaryOp -> CExpression a -> CExpression a -> a -> m ()
+doHandleBinaryExpr _ lex rex _ = do
+   doHandleExpr lex
+   doHandleExpr rex
 
-handleCastExpr :: CDeclaration a -> CExpression a -> a -> State FuncInfo ()
-handleCastExpr _ ex _ = handleExpr ex
+doHandleCastExpr :: MonadFunctionBodyTrav m => CDeclaration a -> CExpression a -> a -> m ()
+doHandleCastExpr _ ex _ = doHandleExpr ex
 
-handleUnaryExpr :: CUnaryOp -> CExpression a -> a -> State FuncInfo ()
-handleUnaryExpr _ ex _ = handleExpr ex
+doHandleUnaryExpr :: MonadFunctionBodyTrav m => CUnaryOp -> CExpression a -> a -> m ()
+doHandleUnaryExpr _ ex _ = doHandleExpr ex
 
-handleSizeofExprExpr :: CExpression a -> a -> State FuncInfo ()
-handleSizeofExprExpr ex _ = handleExpr ex
+doHandleSizeofExprExpr :: MonadFunctionBodyTrav m => CExpression a -> a -> m ()
+doHandleSizeofExprExpr ex _ = doHandleExpr ex
 
-handleSizeofTypeExpr :: CDeclaration a -> a -> State FuncInfo ()
-handleSizeofTypeExpr _ _ = return ()
+doHandleSizeofTypeExpr :: MonadFunctionBodyTrav m => CDeclaration a -> a -> m ()
+doHandleSizeofTypeExpr _ _ = return ()
 
-handleAlignofExprExpr :: CExpression a -> a -> State FuncInfo ()
-handleAlignofExprExpr ex _ = handleExpr ex
+doHandleAlignofExprExpr :: MonadFunctionBodyTrav m => CExpression a -> a -> m ()
+doHandleAlignofExprExpr ex _ = doHandleExpr ex
 
-handleAlignofTypeExpr :: CDeclaration a -> a -> State FuncInfo ()
-handleAlignofTypeExpr _ _ = return ()
+doHandleAlignofTypeExpr :: MonadFunctionBodyTrav m => CDeclaration a -> a -> m ()
+doHandleAlignofTypeExpr _ _ = return ()
 
-handleComplexRealExpr :: CExpression a -> a -> State FuncInfo ()
-handleComplexRealExpr real _ = handleExpr real
+doHandleComplexRealExpr :: MonadFunctionBodyTrav m => CExpression a -> a -> m ()
+doHandleComplexRealExpr real _ = doHandleExpr real
 
-handleComplexImagExpr :: CExpression a -> a -> State FuncInfo ()
-handleComplexImagExpr imag _ = handleExpr imag
+doHandleComplexImagExpr :: MonadFunctionBodyTrav m => CExpression a -> a -> m ()
+doHandleComplexImagExpr imag _ = doHandleExpr imag
 
-handleIndexExpr :: CExpression a -> CExpression a -> a -> State FuncInfo ()
-handleIndexExpr array index _ = do
-   handleExpr array
-   handleExpr index
+doHandleIndexExpr :: MonadFunctionBodyTrav m => CExpression a -> CExpression a -> a -> m ()
+doHandleIndexExpr array index _ = do
+   doHandleExpr array
+   doHandleExpr index
 
-handleCallExpr :: CExpression a -> [CExpression a] -> a -> State FuncInfo ()
-handleCallExpr = undefined -- TODO
-{-handleCallExpr func args _ = do-}
+doHandleCallExpr :: MonadFunctionBodyTrav m => CExpression a -> [CExpression a] -> a -> m ()
+doHandleCallExpr = undefined -- TODO
+{-doHandleCallExpr func args _ = do-}
    {-case func of-}
       {-CVar (name, n, info) ->-}
          {-if name == "free"-}
          {-then modifyUserState (\m -> if notMember-}
 
-handleMemberExpr :: CExpression a -> Ident -> Bool -> a -> State FuncInfo ()
-handleMemberExpr struct member deref at = handleExpr struct
+doHandleMemberExpr :: MonadFunctionBodyTrav m => CExpression a -> Ident -> Bool -> a -> m ()
+doHandleMemberExpr struct member deref at = doHandleExpr struct
 
-handleVarExpr :: Ident -> a -> State FuncInfo ()
-handleVarExpr ident at = return ()
+doHandleVarExpr :: MonadFunctionBodyTrav m => Ident -> a -> m ()
+doHandleVarExpr ident at = return ()
 
-handleConstExpr :: CConstant a -> State FuncInfo ()
-handleConstExpr const = return ()
+doHandleConstExpr :: MonadFunctionBodyTrav m => CConstant a -> m ()
+doHandleConstExpr const = return ()
 
-handleCompoundLitExpr :: CDeclaration a -> CInitializerList a -> a ->
-                         State FuncInfo ()
-handleCompoundLitExpr typename inits at = handleDeclaration typename -- TODO: correct?
+doHandleCompoundLitExpr :: MonadFunctionBodyTrav m => CDeclaration a -> CInitializerList a -> a -> m ()
+doHandleCompoundLitExpr typename inits at = doHandleDeclaration typename -- TODO: correct?
 
-handleStmtExpr :: CStatement a -> a -> State FuncInfo ()
-handleStmtExpr st at = handleStmt st
+doHandleStmtExpr :: MonadFunctionBodyTrav m => CStatement a -> a -> m ()
+doHandleStmtExpr st at = doHandleStmt st
 
-handleLabAddrExpr :: Ident -> a -> State FuncInfo ()
-handleLabAddrExpr label at = return ()
+doHandleLabAddrExpr :: MonadFunctionBodyTrav m => Ident -> a -> m ()
+doHandleLabAddrExpr label at = return ()
 
-handleBuiltinExpr :: CBuiltinThing a -> State FuncInfo ()
-handleBuiltinExpr = undefined -- TODO
+doHandleBuiltinExpr :: MonadFunctionBodyTrav m => CBuiltinThing a -> m ()
+doHandleBuiltinExpr = undefined -- TODO
 
 freesParameter :: MonadTrav m => FunDef -> m [Int]
 freesParameter fd@(FunDef var_decl stat@(CCompound localLabels blockItems _) node_info) = do
